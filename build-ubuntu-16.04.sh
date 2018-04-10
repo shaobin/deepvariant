@@ -95,6 +95,8 @@ https://github.com/google/clif before continuing."
   sudo ldconfig  # Reload shared libraries.
 fi
 
+rm -fr ../tensorflow
+
 (cd .. &&
  git clone https://github.com/tensorflow/tensorflow &&
  cd tensorflow &&
