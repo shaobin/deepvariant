@@ -18,8 +18,8 @@ gsutil cp -R "${DATA_BUCKET}" "${WORKSPACE}"
 
 OUTPUT_DIR="${WORKSPACE}/output"
 mkdir -p "${OUTPUT_DIR}"
-REF=quickstart-testdata/ucsc.hg19.chr20.unittest.fasta
-BAM=quickstart-testdata/NA12878_S1.chr20.10_10p1mb.bam
+REF="${WORKSPACE}quickstart-testdata/ucsc.hg19.chr20.unittest.fasta"
+BAM="${WORKSPACE}quickstart-testdata/NA12878_S1.chr20.10_10p1mb.bam"
 MODEL="${WORKSPACE}/${MODEL_NAME}/model.ckpt"
 
 echo "Running make_examples"
@@ -37,3 +37,4 @@ time seq 0 $((N_SHARDS-1)) | \
     --examples "${OUTPUT_DIR}/examples.tfrecord@${N_SHARDS}.gz" \
     --regions '"chr20:10,000,000-10,010,000"' \
     --task {}
+

@@ -10,3 +10,5 @@
 bazel-*
 
 **/.ipynb_checkpoints
+
+quickstart-workspace
