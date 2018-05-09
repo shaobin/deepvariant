@@ -555,7 +555,7 @@ def run(argv=None):
       help='Number of cores for each worker in make_examples.')
   parser.add_argument(
       '--make_examples_ram_per_worker_gb',
-      default=32,
+      default=30,
       type=int,
       help='RAM (in GB) to use for each worker in make_examples.')
   parser.add_argument(
@@ -572,7 +572,7 @@ def run(argv=None):
   parser.add_argument(
       '--call_variants_cores_per_worker',
       type=int,
-      default=16,
+      default=8,
       help='Number of cores for each worker in call_variants.')
   parser.add_argument(
       '--call_variants_cores_per_shard',

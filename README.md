@@ -66,6 +66,12 @@ assign genotype likelihoods from the experimental data produced by the
 instrument. Read additional information on the [Google Research
 blog](https://research.googleblog.com/2017/12/deepvariant-highly-accurate-genomes.html).
 
+Under the hood, DeepVariant relies on
+[Nucleus](https://github.com/google/nucleus), a library of Python and C++ code
+for reading and writing data in common genomics file formats (like SAM and VCF)
+designed for painless integration with the
+[TensorFlow](https://www.tensorflow.org/) machine learning framework.
+
 ## Evaluating DeepVariant
 
 We are delighted to see several external evaluations of the DeepVariant method.
@@ -111,21 +117,28 @@ DeepVariant is licensed under the terms of the [BSD-3-Clause license](LICENSE).
 DeepVariant happily makes use of many open source packages.  We'd like to
 specifically call out a few key ones:
 
-* [Boost Graph Library](http://www.boost.org/doc/libs/1_65_1/libs/graph/doc/index.html)
+*   [Boost Graph
+    Library](http://www.boost.org/doc/libs/1_65_1/libs/graph/doc/index.html)
 
-* [CLIF](https://github.com/google/clif)
+*   [abseil-cpp](https://github.com/abseil/abseil-cpp) and
+    [abseil-py](https://github.com/abseil/abseil-py)
 
-* [GNU Parallel](https://www.gnu.org/software/parallel/)
+*   [CLIF](https://github.com/google/clif)
 
-* [htslib & samtools](http://www.htslib.org/)
+*   [GNU Parallel](https://www.gnu.org/software/parallel/)
 
-* [numpy](http://www.numpy.org/)
+*   [htslib & samtools](http://www.htslib.org/)
 
-* [scipy](https://www.scipy.org/)
+*   [Nucleus](https://github.com/google/nucleus)
 
-* [SSW Library](https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library)
+*   [numpy](http://www.numpy.org/)
 
-* [TensorFlow and Slim](https://www.tensorflow.org/)
+*   [scipy](https://www.scipy.org/)
+
+*   [SSW
+    Library](https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library)
+
+*   [TensorFlow and Slim](https://www.tensorflow.org/)
 
 We thank all of the developers and contributors to these packages for their
 work.

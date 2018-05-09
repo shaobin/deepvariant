@@ -31,13 +31,14 @@
 
 // UnitTests for allelecounter.{h,cc}.
 #include "deepvariant/allelecounter.h"
+#include <numeric>
 
-#include "deepvariant/core/reference_fai.h"
-#include "deepvariant/core/reference_test.h"
-#include "deepvariant/core/test_utils.h"
-#include "deepvariant/core/utils.h"
 #include "deepvariant/utils.h"
-#include "deepvariant/core/genomics/position.pb.h"
+#include "third_party/nucleus/io/reference_fai.h"
+#include "third_party/nucleus/io/reference_test.h"
+#include "third_party/nucleus/protos/position.pb.h"
+#include "third_party/nucleus/testing/test_utils.h"
+#include "third_party/nucleus/util/utils.h"
 #include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/platform/logging.h"
 
@@ -46,25 +47,25 @@
 #include <gmock/gmock-more-matchers.h>
 
 #include "tensorflow/core/platform/test.h"
-#include "deepvariant/testing/protocol-buffer-matchers.h"
+#include "third_party/nucleus/testing/protocol-buffer-matchers.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
+using nucleus::EqualsProto;
+using nucleus::GenomeReference;
+using nucleus::MakePosition;
+using nucleus::MakeRange;
+using nucleus::TestFastaPath;
 using nucleus::genomics::v1::LinearAlignment;
 using nucleus::genomics::v1::Read;
-using core::GenomeReference;
-using core::TestFastaPath;
-using core::MakePosition;
-using core::MakeRange;
 using tensorflow::strings::StrCat;
-using ::testing::UnorderedPointwise;
+using ::testing::Contains;
 using ::testing::Eq;
 using ::testing::IsEmpty;
-using ::testing::Contains;
-using learning::genomics::testing::EqualsProto;
 using ::testing::SizeIs;
+using ::testing::UnorderedPointwise;
 
 class AlleleCounterTest : public ::testing::Test {
  protected:
@@ -78,8 +79,9 @@ class AlleleCounterTest : public ::testing::Test {
 
   AlleleCounterTest() {
     const string& test_fasta_path = TestFastaPath();
-    ref_ = std::move(core::GenomeReferenceFai::FromFile(
-        test_fasta_path, StrCat(test_fasta_path, ".fai")).ValueOrDie());
+    ref_ = std::move(nucleus::GenomeReferenceFai::FromFile(
+                         test_fasta_path, StrCat(test_fasta_path, ".fai"))
+                         .ValueOrDie());
     read_ = MakeRead("chr1", 1, "TCCGTxx", {"5M"});
     options_.mutable_read_requirements()->set_min_base_quality(21);
   }
@@ -185,7 +187,7 @@ class AlleleCounterTest : public ::testing::Test {
   // Creates a test Read with a unique read name.
   Read MakeRead(const string& chr, const int start, const string& bases,
                 const std::vector<string>& cigar_elements) {
-    Read read = core::MakeRead(chr, start, bases, cigar_elements);
+    Read read = nucleus::MakeRead(chr, start, bases, cigar_elements);
     // Each read gets a unique name.
     read.set_fragment_name(StrCat("read_", ++read_name_counter_));
     return read;

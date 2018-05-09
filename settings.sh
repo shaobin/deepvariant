@@ -30,6 +30,9 @@
 # Source this file---these options are needed for TF config and for
 # successive bazel runs.
 
+# Set this to 1 if the system image already has TensorFlow preinstalled.  This
+# will skip the installation of TensorFlow.
+export DV_USE_PREINSTALLED_TF="${DV_USE_PREINSTALLED_TF:-0}"
 
 export TF_CUDA_CLANG=0
 export TF_ENABLE_XLA=0
@@ -87,11 +90,6 @@ export DV_INSTALL_GPU_DRIVERS="${DV_INSTALL_GPU_DRIVERS:-0}"
 export PYTHON_BIN_PATH=$(which python)
 export USE_DEFAULT_PYTHON_LIB_PATH=1
 export DV_COPT_FLAGS="--copt=-msse4.1 --copt=-msse4.2 --copt=-mavx --copt=-O3"
-
-# Set the TensorFlow commit SHA that we use for the release. This is the latest
-# commit to the master branch as of 2018 Jan 22. See:
-# https://github.com/tensorflow/tensorflow/commit/57b32eabca4597241120cb4aba8308a431853c30
-export DV_TENSORFLOW_GIT_SHA="57b32eabca4597241120cb4aba8308a431853c30"
 
 function note_build_stage {
   echo "========== [$(date)] Stage '${1}' starting"

@@ -45,9 +45,9 @@ import os.path
 from tensorflow import flags
 import tensorflow as tf
 
-from deepvariant.core import genomics_io
-from deepvariant.core import ranges
-from deepvariant.core import utils
+from third_party.nucleus.io import sam
+from third_party.nucleus.util import ranges
+from third_party.nucleus.util import utils
 from deepvariant.protos import realigner_pb2
 from deepvariant.realigner import aligner
 from deepvariant.realigner import window_selector
@@ -227,7 +227,7 @@ class DiagnosticLogger(object):
     """Logs, if enabled, the realigned reads for region."""
     if self.enabled and self.config.emit_realigned_reads:
       path = self._file_for_region(region, self.realigned_reads_filename)
-      with genomics_io.make_read_writer(path) as writer:
+      with sam.SamWriter(path) as writer:
         for read in reads:
           writer.write(read)
 
@@ -356,7 +356,7 @@ class Realigner(object):
     """Helper function to call window_selector module."""
     return sorted(
         self.window_sel.process_reads(
-            self.ref_reader.bases(region), reads, region.reference_name,
+            self.ref_reader.query(region), reads, region.reference_name,
             region.start),
         key=ranges.as_tuple)
 
@@ -367,9 +367,9 @@ class Realigner(object):
     for window in windows:
       if window.end - window.start > self.config.ws_config.max_window_size:
         continue
-      if not self.ref_reader.is_valid_interval(window):
+      if not self.ref_reader.is_valid(window):
         continue
-      ref = self.ref_reader.bases(window)
+      ref = self.ref_reader.query(window)
       # redacted
       dbg_reads = [
           read for read in reads
@@ -409,15 +409,15 @@ class Realigner(object):
         max(assembled_region.read_span.end, assembled_region.region.end) +
         _REF_ALIGN_MARGIN)
 
-    ref_prefix = self.ref_reader.bases(
+    ref_prefix = self.ref_reader.query(
         ranges.make_range(contig, ref_start, assembled_region.region.start))
-    ref = self.ref_reader.bases(assembled_region.region)
+    ref = self.ref_reader.query(assembled_region.region)
 
     # If we can't create the ref suffix then return the original alignments.
     if ref_end <= assembled_region.region.end:
       return assembled_region.reads
     else:
-      ref_suffix = self.ref_reader.bases(
+      ref_suffix = self.ref_reader.query(
           ranges.make_range(contig, assembled_region.region.end, ref_end))
 
     ref_region = ranges.make_range(contig, ref_start, ref_end)

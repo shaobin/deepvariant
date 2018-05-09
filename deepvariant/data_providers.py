@@ -41,8 +41,8 @@ from __future__ import print_function
 import tensorflow as tf
 
 from google.protobuf import text_format
+from third_party.nucleus.util import io_utils
 from deepvariant import tf_utils
-from deepvariant.core import io_utils
 from deepvariant.protos import deepvariant_pb2
 
 slim = tf.contrib.slim
@@ -52,47 +52,69 @@ slim = tf.contrib.slim
 DEFAULT_NUM_CLASSES = 3
 
 
-def make_training_batches(dataset, model, batch_size):
+def make_batches(dataset, model, batch_size, mode):
   """Provides batches of pileup images from this dataset.
 
-  Creates a DataSetProvider for dataset, extracts image, label, and
-  truth_variant from it, preprocesses each image with model.preprocess_image()
-  and finally batches these up.
+  Creates a DataSetProvider for dataset, extracts image, label, and variant
+  from it, preprocesses each image with model.preprocess_image() and finally
+  batches these up.
 
   Args:
     dataset: a slim DataSet we want to turn into batches. Must provide data
-      items "image", "label", and "truth_variant".
+      items "image", "label", and "variant".
     model: a DeepVariantModel to use for preprocessing each image before
       batching.
     batch_size: the number of images in each batch.
+    mode: str; one of TRAIN or EVAL.
 
   Returns:
     images: 4-D float Tensor of a batch of images with shape
       (batch_size, height, width, 3).
     labels: a 1-D integer Tensor shape (batch_size,) containing the labels for
       each image, in the same order.
-    encoded_truth_variants: Tensor of strings with shape (batch_size,).
+    encoded_variants: Tensor of strings with shape (batch_size,).
       Each element of this tensor is a byte-encoded nucleus.genomics.v1.Variant
       protobuf in the same order as images and one_hot_labels.
+
+  Raises:
+    ValueError: if mode is not one of TRAIN or EVAL.
   """
-  data_provider = slim.dataset_data_provider.DatasetDataProvider(
-      dataset,
-      common_queue_capacity=2 * batch_size,
-      common_queue_min=batch_size,
-      reader_kwargs={
-          'options': io_utils.make_tfrecord_options(dataset.data_sources)
-      })
+  if mode not in {'TRAIN', 'EVAL'}:
+    raise ValueError(
+        'mode is {} but must be one of TRAIN or EVAL.'.format(mode))
+
+  if mode == 'TRAIN':
+    data_provider = slim.dataset_data_provider.DatasetDataProvider(
+        dataset,
+        common_queue_capacity=2 * batch_size,
+        common_queue_min=batch_size,
+        reader_kwargs={
+            'options': io_utils.make_tfrecord_options(dataset.data_sources)
+        })
+  else:
+    data_provider = slim.dataset_data_provider.DatasetDataProvider(
+        dataset,
+        num_readers=1,
+        shuffle=False,
+        reader_kwargs={
+            'options': io_utils.make_tfrecord_options(dataset.data_sources)
+        })
+
   # Load the data.
-  image, label, truth_variant = data_provider.get(
-      ['image', 'label', 'truth_variant'])
+  image, label, variant = data_provider.get(['image', 'label', 'variant'])
   image = model.preprocess_image(image)
-  return tf.train.shuffle_batch(
-      [image, label, truth_variant],
-      batch_size=batch_size,
-      num_threads=4,
-      capacity=5000,
-      # redacted
-      min_after_dequeue=min(1000, dataset.num_samples))
+
+  if mode == 'TRAIN':
+    return tf.train.shuffle_batch(
+        [image, label, variant],
+        batch_size=batch_size,
+        num_threads=4,
+        capacity=5000,
+        # redacted
+        min_after_dequeue=min(1000, dataset.num_samples))
+  else:
+    return tf.train.batch(
+        [image, label, variant], batch_size=batch_size, num_threads=1)
 
 
 # redacted
@@ -142,7 +164,6 @@ class DeepVariantDataSet(object):
     keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string),
         'variant/encoded': tf.FixedLenFeature((), tf.string),
-        'truth_variant/encoded': tf.FixedLenFeature((), tf.string),
         'image/format': tf.FixedLenFeature((), tf.string),
         'label': tf.FixedLenFeature((1,), tf.int64),
         'locus': tf.FixedLenFeature((), tf.string),
@@ -157,8 +178,6 @@ class DeepVariantDataSet(object):
             slim.tfexample_decoder.Tensor('locus', shape=[]),
         'variant':
             slim.tfexample_decoder.Tensor('variant/encoded', shape=[]),
-        'truth_variant':
-            slim.tfexample_decoder.Tensor('truth_variant/encoded', shape=[]),
     }
 
     # redacted
@@ -200,26 +219,21 @@ def _get_dataset(name, path, num_examples, tensor_shape=None):
       tensor_shape=tensor_shape)
 
 
-def get_dataset(dataset_config_filename, tensor_shape=None):
-  """Creates a DeepVariantDataSet from the dataset config file.
+def read_dataset_config(dataset_config_filename):
+  """Returns a DeepVariantDatasetConfig proto read from the dataset config file.
 
   Args:
     dataset_config_filename: String. Path to the dataset config pbtxt file.
-    tensor_shape: None, or list of int [height, width, channel] for testing.
 
   Returns:
-    A DeepVariantDataSet from the specified split in the dataset_config file.
+    A DeepVariantDatasetConfig proto from the dataset_config file.
 
   Raises:
     ValueError: if the dataset config doesn't have the necessary information.
   """
-
-  def read_dataset_config(dataset_config_pbtxt_filename):
-    with tf.gfile.GFile(dataset_config_pbtxt_filename) as f:
-      return text_format.Parse(f.read(),
-                               deepvariant_pb2.DeepVariantDatasetConfig())
-
-  dataset_config = read_dataset_config(dataset_config_filename)
+  with tf.gfile.GFile(dataset_config_filename) as f:
+    dataset_config = text_format.Parse(
+        f.read(), deepvariant_pb2.DeepVariantDatasetConfig())
 
   if not dataset_config.name:
     raise ValueError('dataset_config needs to have a name')
@@ -234,6 +248,23 @@ def get_dataset(dataset_config_filename, tensor_shape=None):
     raise ValueError('The dataset in the config {} does not have a '
                      'num_examples.'.format(dataset_config_filename))
 
+  return dataset_config
+
+
+def get_dataset(dataset_config_filename, tensor_shape=None):
+  """Creates a DeepVariantDataSet from the dataset config file.
+
+  Args:
+    dataset_config_filename: String. Path to the dataset config pbtxt file.
+    tensor_shape: None, or list of int [height, width, channel] for testing.
+
+  Returns:
+    A DeepVariantDataSet from the specified split in the dataset_config file.
+
+  Raises:
+    ValueError: if the dataset config doesn't have the necessary information.
+  """
+  dataset_config = read_dataset_config(dataset_config_filename)
   return _get_dataset(
       dataset_config.name,
       dataset_config.tfrecord_path,

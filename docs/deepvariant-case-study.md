@@ -40,9 +40,9 @@ Set a number of shell variables, to make what follows easier to read.
 ```bash
 BASE="${HOME}/case-study"
 BUCKET="gs://deepvariant"
-BIN_VERSION="0.5.1"
-MODEL_VERSION="0.5.0"
-MODEL_CL="182548131"
+BIN_VERSION="0.6.1"
+MODEL_VERSION="0.6.0"
+MODEL_CL="191676894"
 
 # Note that we don't specify the CL number for the binary, only the bin version.
 BIN_BUCKET="${BUCKET}/binaries/DeepVariant/${BIN_VERSION}/DeepVariant-${BIN_VERSION}+cl-*"
@@ -260,11 +260,11 @@ the postprocess\_variants step, so the full call would look instead like:
 
 Step                               | wall time
 ---------------------------------- | -------------
-`make_examples`                    | 5h 37m 42s
-`call_variants`                    | 11h 0m 29s
-`postprocess_variants` (no gVCF)   | 21m 54s
-`postprocess_variants` (with gVCF) | 59m 13s
-total time (single machine)        | 17h - 17h 37m
+`make_examples`                    | 5h 27m 24s
+`call_variants`                    | 11h 11m 53s
+`postprocess_variants` (no gVCF)   | 21m 5s
+`postprocess_variants` (with gVCF) | 58m 51s
+total time (single machine)        | 17h - 17h 38m
 
 ## Variant call quality
 
@@ -289,13 +289,13 @@ sudo docker run -it \
 pkrusche/hap.py /opt/hap.py/bin/hap.py \
   "${TRUTH_VCF}" \
   "${OUTPUT_VCF}" \
-  --preprocess-truth \
   -f "${TRUTH_BED}" \
   -r "${UNCOMPRESSED_REF}" \
-  -o "${OUTPUT_DIR}/happy.output"
+  -o "${OUTPUT_DIR}/happy.output" \
+  --engine=vcfeval
 ```
 
 Type  | # FN | # FP | Recall   | Precision | F1\_Score
 ----- | ---- | ---- | -------- | --------- | ---------
-INDEL | 2291 | 918  | 0.995271 | 0.99810   | 0.996684
-SNP   | 1909 | 885  | 0.999374 | 0.99971   | 0.999542
+INDEL | 1505 | 1133 | 0.996762 | 0.997660  | 0.997211
+SNP   | 1526 | 933  | 0.999499 | 0.999694  | 0.999597

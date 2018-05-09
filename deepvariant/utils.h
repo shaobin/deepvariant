@@ -34,7 +34,7 @@
 #define LEARNING_GENOMICS_DEEPVARIANT_UTILS_H_
 
 #include "deepvariant/protos/deepvariant.pb.h"
-#include "deepvariant/core/genomics/variants.pb.h"
+#include "third_party/nucleus/protos/variants.pb.h"
 #include "tensorflow/core/platform/types.h"
 
 namespace learning {
@@ -42,12 +42,6 @@ namespace genomics {
 namespace deepvariant {
 
 using tensorflow::string;
-
-// Gets the integer value of the GQ field from call.
-//
-// Assumes that a field GQ is present in the call. Behavior is undefined if
-// missing,
-int VariantCallGQ(const nucleus::genomics::v1::VariantCall& call);
 
 // Creates an allele with the provided bases, type, and count.
 Allele MakeAllele(const string& bases,

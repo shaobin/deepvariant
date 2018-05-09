@@ -37,9 +37,9 @@
 #include <vector>
 
 #include "deepvariant/allelecounter.h"
-#include "deepvariant/core/samplers.h"
 #include "deepvariant/protos/deepvariant.pb.h"
-#include "deepvariant/core/genomics/variants.pb.h"
+#include "third_party/nucleus/protos/variants.pb.h"
+#include "third_party/nucleus/util/samplers.h"
 #include "tensorflow/core/lib/gtl/optional.h"
 
 namespace learning {
@@ -162,7 +162,7 @@ class VariantCaller {
   const VariantCallerOptions options_;
 
   // Fraction of non-variant sites to emit as DeepVariantCalls.
-  mutable core::PhiloxFractionalSampler sampler_;
+  mutable nucleus::PhiloxFractionalSampler sampler_;
 };
 
 

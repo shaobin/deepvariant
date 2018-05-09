@@ -29,9 +29,9 @@
 
 syntax = "proto3";
 
-import "deepvariant/core/genomics/position.proto";
-import "deepvariant/core/genomics/variants.proto";
-import "deepvariant/core/protos/core.proto";
+import "third_party/nucleus/protos/position.proto";
+import "third_party/nucleus/protos/reads.proto";
+import "third_party/nucleus/protos/variants.proto";
 import "deepvariant/protos/realigner.proto";
 
 
@@ -86,7 +86,7 @@ message Allele {
 
   // The number of times this Allele was seen in the NGS data. The count
   // should be >= 0, where 0 indicates that no observations of the allele
-  // where observed (which can happen if you want to record that you checked
+  // were observed (which can happen if you want to record that you checked
   // for some allele in the data and never saw any evidence for it).
   int32 count = 3;
 }
@@ -185,7 +185,7 @@ message Allele {
 //
 // coverage =
 //    // reads supporting an observed alternate allele.
-//    sum(read_allele_i.count)      // [also equal to read_allele_size()]
+//    sum(read_allele_i.count)      // [also equal to read_alleles_size()]
 //    // All of the reads confidently asserting reference.
 //    + ref_supporting_read_count
 //    // All of the reads supporting ref without a confident alignment.
@@ -267,7 +267,7 @@ message AlleleCounterOptions {
   int32 partition_size = 1;
 
   // The requirements for reads to be used when counting alleles.
-  learning.genomics.core.ReadRequirements read_requirements = 2;
+  nucleus.genomics.v1.ReadRequirements read_requirements = 2;
 }
 
 // Variant call for a single site, in a pseudo-biallelic manner. This is an
@@ -359,9 +359,9 @@ message PileupImageOptions {
   // Controls how bases are encoded as red pixel values.
   //
   // A is base_color_offset_a_and_g + base_color_stride * 3
-  // C is base_color_offset_a_and_g + base_color_stride * 2
-  // G is base_color_offset_t_and_c + base_color_stride * 1
-  // T is base_color_offset_t_and_c + base_color_stride * 0
+  // G is base_color_offset_a_and_g + base_color_stride * 2
+  // T is base_color_offset_t_and_c + base_color_stride * 1
+  // C is base_color_offset_t_and_c + base_color_stride * 0
   //
   // The offset in red color space for A and G bases.
   int32 base_color_offset_a_and_g = 4;
@@ -402,7 +402,7 @@ message PileupImageOptions {
   int32 read_overlap_buffer_bp = 17;
 
   // The requirements for reads to be used when creating pileup images.
-  learning.genomics.core.ReadRequirements read_requirements = 18;
+  nucleus.genomics.v1.ReadRequirements read_requirements = 18;
 
   enum MultiAllelicMode {
     UNSPECIFIED = 0;
@@ -420,9 +420,9 @@ message PileupImageOptions {
 }
 
 
-// High-level options that encapsolates all of the parameters needed to run
+// High-level options that encapsulates all of the parameters needed to run
 // DeepVariant end-to-end.
-// Next ID: 27.
+// Next ID: 28.
 message DeepVariantOptions {
   // A list of contig names we never want to call variants on. For example,
   // chrM in humans is the mitocondrial genome and the caller isn't trained to
@@ -454,7 +454,7 @@ message DeepVariantOptions {
   // Only reads satisfying these requirements will be used in DeepVariant.
   // This parameters are propagated as appropriate to read_requirement fields
   // in our tool-specific options.
-  learning.genomics.core.ReadRequirements read_requirements = 9;
+  nucleus.genomics.v1.ReadRequirements read_requirements = 9;
 
   // Options to control out input data sources and output data sinks.
   // Path to our genome reference.
@@ -522,6 +522,21 @@ message DeepVariantOptions {
   // regions will be excluded from calling.
   repeated string exclude_calling_regions = 26;
 
+  // An enumeration of all of the labeler algorithms we support in DeepVariant.
+  enum LabelerAlgorithm {
+    UNSPECIFIED_LABELER_ALGORITHM = 0;
+    // The labeling algorithm used with DeepVariant 0.4-0.5, which does position
+    // matching to find truth variant to label our candidates.
+    POSITIONAL_LABELER = 1;
+    // A haplotype-aware labeling algorithm, similar to hap.py xcmp, that looks
+    // for genotypes for candidate variants that produce haplotypes that match
+    // those implied by the genotypes of our truth variants. Produces more
+    // accurate labels than the POSITIONAL_LABELER labeling algorithm.
+    HAPLOTYPE_LABELER = 2;
+  }
+  // The labeling algorithm we are using in this DeepVariant run. Only needed
+  // when in CALLING mode.
+  LabelerAlgorithm labeler_algorithm = 27;
 }
 
 // Config describe information needed for a dataset that can be used for

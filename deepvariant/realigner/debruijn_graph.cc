@@ -38,14 +38,14 @@
 #include <tuple>
 #include <vector>
 
-#include "deepvariant/core/utils.h"
 #include "deepvariant/protos/realigner.pb.h"
 #include "boost/graph/adjacency_list.hpp"
 #include "boost/graph/depth_first_search.hpp"
 #include "boost/graph/graph_traits.hpp"
 #include "boost/graph/graphviz.hpp"
 #include "boost/graph/reverse_graph.hpp"
-#include "deepvariant/core/genomics/reads.pb.h"
+#include "third_party/nucleus/protos/reads.pb.h"
+#include "third_party/nucleus/util/utils.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
 #include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/logging.h"
@@ -265,8 +265,8 @@ void DeBruijnGraph::AddEdgesForRead(const nucleus::genomics::v1::Read& read) {
   for (int i = 0; i < read_length - k_; ++i) {
     // Update QC fail set: remove (i-1), add (i+k) if it fails QC.
     recent_qc_fail_positions.erase(i - 1);
-    if (!IsCanonicalBase(bases[i + k_], core::CanonicalBases::ACGT)
-        || qual[i + k_] < options_.min_base_quality()) {
+    if (!IsCanonicalBase(bases[i + k_], nucleus::CanonicalBases::ACGT) ||
+        qual[i + k_] < options_.min_base_quality()) {
       recent_qc_fail_positions.insert(i + k_);
     }
     if (recent_qc_fail_positions.empty()) {

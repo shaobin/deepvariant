@@ -38,9 +38,9 @@ import itertools
 
 import numpy as np
 
-from deepvariant.core import ranges
-from deepvariant.core import utils
-from deepvariant.core.protos import core_pb2
+from third_party.nucleus.protos import reads_pb2
+from third_party.nucleus.util import ranges
+from third_party.nucleus.util import utils
 from deepvariant.protos import deepvariant_pb2
 from deepvariant.python import pileup_image_native
 
@@ -53,10 +53,10 @@ DEFAULT_NUM_CHANNEL = 6
 def default_options(read_requirements=None):
   """Creates a PileupImageOptions populated with good default values."""
   if not read_requirements:
-    read_requirements = core_pb2.ReadRequirements(
+    read_requirements = reads_pb2.ReadRequirements(
         min_base_quality=DEFAULT_MIN_BASE_QUALITY,
         min_mapping_quality=DEFAULT_MIN_MAPPING_QUALITY,
-        min_base_quality_mode=core_pb2.ReadRequirements.ENFORCED_BY_CLIENT)
+        min_base_quality_mode=reads_pb2.ReadRequirements.ENFORCED_BY_CLIENT)
 
   return deepvariant_pb2.PileupImageOptions(
       reference_band_height=5,
@@ -201,8 +201,8 @@ class PileupImageCreator(object):
     start = variant.start - self.half_width
     end = start + self._options.width
     region = ranges.make_range(variant.reference_name, start, end)
-    if self._ref_reader.is_valid_interval(region):
-      return self._ref_reader.bases(region)
+    if self._ref_reader.is_valid(region):
+      return self._ref_reader.query(region)
     else:
       return None
 

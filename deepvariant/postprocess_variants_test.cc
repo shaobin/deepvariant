@@ -31,8 +31,9 @@
 
 #include "deepvariant/postprocess_variants.h"
 
-#include "deepvariant/core/test_utils.h"
-#include "deepvariant/core/genomics/variants.pb.h"
+#include "third_party/nucleus/protos/reference.pb.h"
+#include "third_party/nucleus/protos/variants.pb.h"
+#include "third_party/nucleus/testing/test_utils.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
 
 #include <gmock/gmock-generated-matchers.h>
@@ -64,23 +65,23 @@ CallVariantsOutput CreateSingleSiteCalls(StringPiece reference_name, int start,
 }  // namespace
 
 TEST(ProcessSingleSiteCallTfRecords, BasicCase) {
-  std::vector<core::ContigInfo> contigs =
-      core::CreateContigInfos({"chr1", "chr10"}, {0, 1000});
+  std::vector<nucleus::genomics::v1::ContigInfo> contigs =
+      nucleus::CreateContigInfos({"chr1", "chr10"}, {0, 1000});
   std::vector<CallVariantsOutput> single_site_calls;
   single_site_calls.push_back(CreateSingleSiteCalls("chr10", 2000, 2001));
   single_site_calls.push_back(CreateSingleSiteCalls("chr10", 1000, 1001));
   single_site_calls.push_back(CreateSingleSiteCalls("chr1", 1, 2));
   single_site_calls.push_back(CreateSingleSiteCalls("chr10", 2000, 2002));
-  const string& input_tfrecord_path =
-      core::MakeTempFile("ProessSingleSiteCallTfRecordsBasicCase.in.tfrecord");
-  const string& output_tfrecord_path =
-      core::MakeTempFile("ProessSingleSiteCallTfRecordsBasicCase.out.tfrecord");
-  core::WriteProtosToTFRecord(single_site_calls, input_tfrecord_path);
+  const string& input_tfrecord_path = nucleus::MakeTempFile(
+      "ProessSingleSiteCallTfRecordsBasicCase.in.tfrecord");
+  const string& output_tfrecord_path = nucleus::MakeTempFile(
+      "ProessSingleSiteCallTfRecordsBasicCase.out.tfrecord");
+  nucleus::WriteProtosToTFRecord(single_site_calls, input_tfrecord_path);
 
   ProcessSingleSiteCallTfRecords(contigs, {input_tfrecord_path},
                                  output_tfrecord_path);
   std::vector<CallVariantsOutput> output =
-      core::ReadProtosFromTFRecord<CallVariantsOutput>(output_tfrecord_path);
+      nucleus::ReadProtosFromTFRecord<CallVariantsOutput>(output_tfrecord_path);
 
   EXPECT_EQ(output.size(), 4);
   EXPECT_EQ(output[0].variant().reference_name(), "chr1");

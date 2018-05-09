@@ -41,34 +41,34 @@ from absl.testing import parameterized
 import mock
 import tensorflow as tf
 
+from third_party.nucleus.testing import test_utils
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import variant_utils
 from tensorflow.core.example import example_pb2
 from deepvariant import data_providers
 from deepvariant import modeling
 from deepvariant import pileup_image
-from deepvariant import test_utils
-from deepvariant.core import io_utils
-from deepvariant.core import variantutils
+from deepvariant import testdata
 from deepvariant.protos import deepvariant_pb2
 
 slim = tf.contrib.slim
 
 
 def setUpModule():
-  test_utils.init()
+  testdata.init()
 
 
 def make_golden_dataset(compressed_inputs=False):
   if compressed_inputs:
     source_path = test_utils.test_tmpfile('make_golden_dataset.tfrecord.gz')
     io_utils.write_tfrecords(
-        io_utils.read_tfrecords(test_utils.GOLDEN_TRAINING_EXAMPLES),
-        source_path)
+        io_utils.read_tfrecords(testdata.GOLDEN_TRAINING_EXAMPLES), source_path)
   else:
-    source_path = test_utils.GOLDEN_TRAINING_EXAMPLES
+    source_path = testdata.GOLDEN_TRAINING_EXAMPLES
   return data_providers.DeepVariantDataSet(
       name='labeled_golden',
       source=source_path,
-      num_examples=test_utils.N_GOLDEN_TRAINING_EXAMPLES)
+      num_examples=testdata.N_GOLDEN_TRAINING_EXAMPLES)
 
 
 def _test_dataset_config(filename, **kwargs):
@@ -153,9 +153,8 @@ class DataProviderTest(parameterized.TestCase):
     with tf.Session():
       slim_ds = ds.get_slim_dataset()
       self.assertEqual(ds.num_examples, slim_ds.num_samples)
-      self.assertItemsEqual(
-          ['image', 'label', 'locus', 'variant', 'truth_variant'],
-          slim_ds.decoder.list_items())
+      self.assertItemsEqual(['image', 'label', 'locus', 'variant'],
+                            slim_ds.decoder.list_items())
       self.assertEqual([100, 221, pileup_image.DEFAULT_NUM_CHANNEL],
                        ds.tensor_shape)
 
@@ -213,8 +212,11 @@ class DataProviderTest(parameterized.TestCase):
         data_providers.get_dataset(config_file).get_slim_dataset(),
         golden_dataset)
 
-  @parameterized.parameters(True, False)
-  def test_get_training_batches(self, compressed_inputs):
+  @parameterized.parameters(
+      dict(compressed_inputs=compressed_inputs, mode=mode)
+      for compressed_inputs in [True, False]
+      for mode in ['TRAIN', 'EVAL'])
+  def test_get_batches(self, compressed_inputs, mode):
     golden_dataset = make_golden_dataset(compressed_inputs)
     batch_size = 16
     with tf.Session() as sess:
@@ -223,8 +225,8 @@ class DataProviderTest(parameterized.TestCase):
           tf.image.resize_image_with_crop_or_pad,
           target_height=107,
           target_width=221)
-      batch = data_providers.make_training_batches(
-          golden_dataset.get_slim_dataset(), mock_model, batch_size)
+      batch = data_providers.make_batches(
+          golden_dataset.get_slim_dataset(), mock_model, batch_size, mode=mode)
 
       # We should have called our preprocess_image exactly once. We don't have
       # the actual objects to test for the call, though.
@@ -246,7 +248,7 @@ class DataProviderTest(parameterized.TestCase):
       # Check that our variants has the shape we expect and actually contain
       # variants by decoding them and checking the reference_name.
       self.assertEqual((batch_size,), variants.shape)
-      for variant in variantutils.decode_variants(variants):
+      for variant in variant_utils.decode_variants(variants):
         self.assertEqual(variant.reference_name, 'chr20')
 
       # Shutdown tensorflow

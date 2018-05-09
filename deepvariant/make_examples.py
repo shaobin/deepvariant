@@ -40,22 +40,23 @@ import tensorflow as tf
 
 from absl import logging
 
+from third_party.nucleus.io import fasta
+from third_party.nucleus.io import sam
+from third_party.nucleus.io import vcf
+from third_party.nucleus.io.python import hts_verbose
+from third_party.nucleus.protos import reads_pb2
+from third_party.nucleus.util import errors
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import proto_utils
+from third_party.nucleus.util import ranges
+from third_party.nucleus.util import utils
 from deepvariant import exclude_contigs
 from deepvariant import logging_level
 from deepvariant import pileup_image
 from deepvariant import tf_utils
 from deepvariant import variant_caller
-from deepvariant import variant_labeler
-from deepvariant.core import errors
-from deepvariant.core import genomics_io
-from deepvariant.core import htslib_gcp_oauth
-from deepvariant.core import io_utils
-from deepvariant.core import proto_utils
-from deepvariant.core import ranges
-from deepvariant.core import utils
-from deepvariant.core import variantutils
-from deepvariant.core.protos import core_pb2
-from deepvariant.core.python import hts_verbose
+from deepvariant.labeler import haplotype_labeler
+from deepvariant.labeler import positional_labeler
 from deepvariant.protos import deepvariant_pb2
 from deepvariant.python import allelecounter
 from deepvariant.realigner import realigner
@@ -178,10 +179,49 @@ flags.DEFINE_integer(
     'Height for the pileup image. If 0, uses the default height')
 flags.DEFINE_integer('pileup_image_width', 0,
                      'Width for the pileup image. If 0, uses the default width')
+flags.DEFINE_string(
+    'labeler_algorithm', 'haplotype_labeler',
+    'Algorithm to use to label examples in training mode. Must be one of the '
+    'LabelerAlgorithm enum values in the DeepVariantOptions proto.')
+
 
 # ---------------------------------------------------------------------------
 # Option handling
 # ---------------------------------------------------------------------------
+
+
+def parse_proto_enum_flag(proto_enum_pb2,
+                          flag_value,
+                          skip_unspecified_option=True):
+  """Parses a command line flag string value into a protobuf Enum value.
+
+  Args:
+    proto_enum_pb2: a enum_type_wrapper.EnumTypeWrapper type containing a proto
+      enum definition. For example, this would be
+      deepvariant_pb2.DeepVariantOptions.Mode to get the DeepVariantOptions Mode
+      enum. See:
+      https://developers.google.com/protocol-buffers/docs/reference/python-generated#enum
+      for more information.
+    flag_value: str. The name of the proto enum option from the command line we
+      want to convert into the enum value.
+    skip_unspecified_option: bool. If True, any enum options that include the
+      string 'unspecified' (in any case) will be excluded from the list of
+      allowed options in the ValueError raised if flag_value isn't valid.
+
+  Returns:
+    The enum value for flag_value in proto_enum_pb2
+
+  Raises:
+    ValueError: if flag_value isn't a valid enum name in proto_enum_pb2.
+  """
+  try:
+    return proto_enum_pb2.Value(flag_value)
+  except ValueError:
+    options = proto_enum_pb2.keys()
+    if skip_unspecified_option:
+      options = [o for o in options if 'unspecified' not in o.lower()]
+    raise ValueError('Unknown enum option "{}". Allowed options are {}'.format(
+        flag_value, ','.join(sorted(options))))
 
 
 def parse_regions_flag(regions_flag_value):
@@ -209,10 +249,10 @@ def default_options(add_flags=True, flags_obj=None):
   if not flags_obj:
     flags_obj = FLAGS
 
-  read_reqs = core_pb2.ReadRequirements(
+  read_reqs = reads_pb2.ReadRequirements(
       min_base_quality=10,
       min_mapping_quality=10,
-      min_base_quality_mode=core_pb2.ReadRequirements.ENFORCED_BY_CLIENT)
+      min_base_quality_mode=reads_pb2.ReadRequirements.ENFORCED_BY_CLIENT)
 
   pic_options = pileup_image.default_options(read_requirements=read_reqs)
 
@@ -222,7 +262,7 @@ def default_options(add_flags=True, flags_obj=None):
   if flags_obj.sample_name:
     sample_name = flags_obj.sample_name
   elif flags_obj.reads:
-    with genomics_io.make_sam_reader(flags_obj.reads) as sam_reader:
+    with sam.SamReader(flags_obj.reads) as sam_reader:
       sample_name = extract_sample_name_from_sam_reader(sam_reader)
   else:
     sample_name = _UNKNOWN_SAMPLE
@@ -257,12 +297,12 @@ def default_options(add_flags=True, flags_obj=None):
   )
 
   if add_flags:
-    if flags_obj.mode == 'training':
-      options.mode = deepvariant_pb2.DeepVariantOptions.TRAINING
-    elif flags_obj.mode == 'calling':
-      options.mode = deepvariant_pb2.DeepVariantOptions.CALLING
-    else:
-      raise ValueError('Unexpected mode', flags_obj.mode)
+    options.mode = parse_proto_enum_flag(
+        deepvariant_pb2.DeepVariantOptions.Mode, flags_obj.mode.upper())
+
+    options.labeler_algorithm = parse_proto_enum_flag(
+        deepvariant_pb2.DeepVariantOptions.LabelerAlgorithm,
+        flags_obj.labeler_algorithm.upper())
 
     if flags_obj.ref:
       options.reference_filename = flags_obj.ref
@@ -350,23 +390,28 @@ def extract_sample_name_from_sam_reader(sam_reader):
   Raises:
     ValueError: There is not exactly one unique sample name in the SAM/BAM.
   """
-  samples = sam_reader.samples
+  samples = {
+      rg.sample_id
+      for rg in sam_reader.header.read_groups
+      if rg.sample_id
+  }
   if not samples:
     raise ValueError(
-        'No sample name found in the input reads. Please provide the name of '
-        'the sample with the --sample_name argument.')
+        'No non-empty sample name found in the input reads. Please provide the '
+        'name of the sample with the --sample_name argument.')
   elif len(samples) > 1:
     raise ValueError(
         'Multiple samples ({}) were found in the input reads. DeepVariant can '
         'only call variants from a BAM file containing a single sample.'.format(
             ', '.join(sorted(samples))))
-  sample = next(iter(samples))
-  if not sample:
-    raise ValueError(
-        'A single sample name was found in the input reads but it was the '
-        'empty string. Please provide the name of the sample with the '
-        '--sample_name argument.')
-  return sample
+  return next(iter(samples))
+
+
+def _set_variant_genotype(variant, genotype):
+  if not variant.calls:
+    variant.calls.add(genotype=genotype)
+  else:
+    variant.calls[0].genotype[:] = genotype
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +427,10 @@ def _ensure_consistent_contigs(ref_contigs,
   """Returns the common contigs after ensuring 'enough' overlap.
 
   Args:
-    ref_contigs: list of core_pb2.ContigInfo protos found in the reference
+    ref_contigs: list of reference_pb2.ContigInfo protos in the reference
       genome.
-    sam_contigs: list of core_pb2.ContigInfo protos found in the SAM/BAM file.
-    vcf_contigs: list of core_pb2.ContigInfo protos found in the VCF if in
+    sam_contigs: list of reference_pb2.ContigInfo protos in the SAM/BAM file.
+    vcf_contigs: list of reference_pb2.ContigInfo protos in the VCF if in
       training mode, or None otherwise.
     exclude_contig_names: list of strings of contig names to exclude from
       overlap consideration.
@@ -589,63 +634,6 @@ def regions_to_process(contigs,
 
 
 # ---------------------------------------------------------------------------
-# Variant labeler
-# ---------------------------------------------------------------------------
-
-
-class _Counter(object):
-
-  def __init__(self, name, selectp):
-    self.name = name
-    self.selectp = selectp
-    self.n_selected = 0
-
-
-class VariantCounters(object):
-  """Provides stats about the number of variants satisfying pfuncs."""
-
-  def __init__(self, names_and_selectors):
-    self.counters = []
-    self.n_total = 0
-    for name, selector in names_and_selectors:
-      self.counters.append(_Counter(name, selector))
-
-  def update(self, variant):
-    self.n_total += 1
-    for counter in self.counters:
-      if counter.selectp(variant):
-        counter.n_selected += 1
-
-  def log(self):
-    logging.info('----- VariantCounts -----')
-    for counter in self.counters:
-      percent = (100.0 * counter.n_selected) / (max(self.n_total, 1.0))
-      logging.info('%s: %s/%s (%.2f%%)', counter.name, counter.n_selected,
-                   self.n_total, percent)
-
-
-def make_counters():
-  """Creates all of the VariantCounters we want to track."""
-
-  def _gt_selector(*gt_types):
-    return lambda v: variantutils.genotype_type(v) in gt_types
-
-  return VariantCounters([
-      ('All', lambda v: True),
-      ('SNPs', variantutils.is_snp),
-      ('Indels', variantutils.is_indel),
-      ('BiAllelic', variantutils.is_biallelic),
-      ('MultiAllelic', variantutils.is_multiallelic),
-      ('HomRef', _gt_selector(variantutils.GenotypeType.hom_ref)),
-      ('Het', _gt_selector(variantutils.GenotypeType.het)),
-      ('HomAlt', _gt_selector(variantutils.GenotypeType.hom_var)),
-      ('NonRef',
-       _gt_selector(variantutils.GenotypeType.het,
-                    variantutils.GenotypeType.hom_var)),
-  ])
-
-
-# ---------------------------------------------------------------------------
 # Region processor
 # ---------------------------------------------------------------------------
 
@@ -693,16 +681,16 @@ class RegionProcessor(object):
     self.variant_caller = None
 
   def _make_allele_counter_for_region(self, region):
-    return allelecounter.AlleleCounter(self.ref_reader, region,
+    return allelecounter.AlleleCounter(self.ref_reader.get_c_reader(), region,
                                        self.options.allele_counter_options)
 
   def _encode_tensor(self, image_tensor):
     return image_tensor.tostring(), image_tensor.shape, 'raw'
 
   def _make_sam_reader(self):
-    return genomics_io.make_sam_reader(
+    return sam.SamReader(
         self.options.reads_filename,
-        self.options.read_requirements,
+        read_requirements=self.options.read_requirements,
         hts_block_size=FLAGS.hts_block_size,
         downsample_fraction=self.options.downsample_fraction,
         random_seed=self.options.random_seed)
@@ -712,10 +700,9 @@ class RegionProcessor(object):
     if self.initialized:
       raise ValueError('Cannot initialize this object twice')
 
-    self.ref_reader = genomics_io.make_ref_reader(
-        self.options.reference_filename)
+    self.ref_reader = fasta.RefFastaReader(self.options.reference_filename)
     self.sam_reader = self._make_sam_reader()
-    self.in_memory_sam_reader = utils.InMemorySamReader([])
+    self.in_memory_sam_reader = sam.InMemorySamReader([])
 
     if self.options.realigner_enabled:
       self.realigner = realigner.Realigner(self.options.realigner_options,
@@ -726,14 +713,33 @@ class RegionProcessor(object):
         options=self.options.pic_options)
 
     if in_training_mode(self.options):
-      self.labeler = variant_labeler.VariantLabeler(
-          genomics_io.make_vcf_reader(self.options.truth_variants_filename),
-          read_confident_regions(self.options))
+      self.labeler = self._make_labeler_from_options()
 
     self.variant_caller = variant_caller.VariantCaller(
         self.options.variant_caller_options)
     self.random = np.random.RandomState(self.options.random_seed)
     self.initialized = True
+
+  def _make_labeler_from_options(self):
+    truth_vcf_reader = vcf.VcfReader(
+        self.options.truth_variants_filename,
+        excluded_format_fields=['GL', 'GQ', 'PL'])
+    confident_regions = read_confident_regions(self.options)
+
+    if (self.options.labeler_algorithm ==
+        deepvariant_pb2.DeepVariantOptions.POSITIONAL_LABELER):
+      return positional_labeler.PositionalVariantLabeler(
+          truth_vcf_reader=truth_vcf_reader,
+          confident_regions=confident_regions)
+    elif (self.options.labeler_algorithm ==
+          deepvariant_pb2.DeepVariantOptions.HAPLOTYPE_LABELER):
+      return haplotype_labeler.HaplotypeLabeler(
+          truth_vcf_reader=truth_vcf_reader,
+          ref_reader=self.ref_reader,
+          confident_regions=confident_regions)
+    else:
+      raise ValueError('Unexpected labeler_algorithm',
+                       self.options.labeler_algorithm)
 
   def process(self, region):
     """Finds candidates and creates corresponding examples in a region.
@@ -759,19 +765,21 @@ class RegionProcessor(object):
 
     self.in_memory_sam_reader.replace_reads(self.region_reads(region))
     candidates, gvcfs = self.candidates_in_region(region)
-    examples = []
-    for candidate in candidates:
-      for example in self.create_pileup_examples(candidate):
-        if in_training_mode(self.options):
-          if self.label_variant(example, candidate.variant):
-            examples.append(example)
-        else:
-          examples.append(example)
+
+    if in_training_mode(self.options):
+      examples = [
+          self.add_label_to_example(example, label)
+          for candidate, label in self.label_candidates(candidates)
+          for example in self.create_pileup_examples(candidate)
+      ]
+    else:
+      examples = [
+          example for candidate in candidates
+          for example in self.create_pileup_examples(candidate)
+      ]
+
     logging.info('Found %s candidates in %s [%0.2fs elapsed]', len(examples),
                  ranges.to_literal(region), region_timer.Stop())
-    # Useful for debugging what examples are emitted...
-    # for example in examples:
-    #   logging.info('  example: %s', tf_utils.example_key(example))
     return candidates, examples, gvcfs
 
   def region_reads(self, region):
@@ -856,35 +864,56 @@ class RegionProcessor(object):
               image_format=tensor_format))
     return examples
 
-  def label_variant(self, example, variant):
-    """Adds the truth variant and label for variant to example.
+  def label_candidates(self, candidates):
+    """Gets label information for each candidate.
 
-    This function uses VariantLabeler to find a match for variant and writes
-    in the correspond truth variant and derived label to our example proto.
+    Args:
+      candidates: list[DeepVariantCalls]: The list of candidate variant calls we
+        want to label.
+
+    Yields:
+      Tuples of (candidate, label_variants.Label objects) for each candidate in
+      candidates that could be assigned a label. Candidates that couldn't be
+      labeled will not be returned.
+    """
+    # Get our list of labels for each candidate variant.
+    labels = self.labeler.label_variants(
+        [candidate.variant for candidate in candidates])
+
+    # Remove any candidates we couldn't label, yielding candidate, label pairs.
+    for candidate, label in zip(candidates, labels):
+      if label.is_confident:
+        yield candidate, label
+
+  def add_label_to_example(self, example, label):
+    """Adds label information about the assigned label to our example.
 
     Args:
       example: A tf.Example proto. We will write truth_variant and label into
         this proto.
-      variant: A nucleus.genomics.v1.Variant proto.
-        This is the variant we'll use
-        to call our VariantLabeler.match to get our truth variant.
+      label: A variant_labeler.Label object containing the labeling information
+        to add to our example.
 
     Returns:
-      True if the variant was in the confident region (meaning that it could be
-        given a label) and False otherwise.
+      The example proto with label fields added.
+
+    Raises:
+      ValueError: if label isn't confident.
     """
-    is_confident, truth_variant = self.labeler.match(variant)
-    if not is_confident:
-      return False
-    alt_alleles = tf_utils.example_alt_alleles(example, variant=variant)
-    if variantutils.is_ref(variant):
-      label = 0
-    else:
-      label = self.labeler.match_to_alt_count(variant, truth_variant,
-                                              alt_alleles)
-    tf_utils.example_set_label(example, label)
-    tf_utils.example_set_truth_variant(example, truth_variant)
-    return True
+    if not label.is_confident:
+      raise ValueError('Cannot add a non-confident label to an example',
+                       example, label)
+    alt_alleles_indices = tf_utils.example_alt_alleles_indices(example)
+
+    # Set the genotype of the candidate variant to the labeled value.
+    candidate = label.variant
+    _set_variant_genotype(candidate, label.genotype)
+    tf_utils.example_set_variant(example, candidate)
+
+    # Set the label of the example to the # alts given our alt_alleles_indices.
+    tf_utils.example_set_label(example,
+                               label.label_for_alt_alleles(alt_alleles_indices))
+    return example
 
 
 def processing_regions_from_options(options):
@@ -903,14 +932,13 @@ def processing_regions_from_options(options):
     regions we should process. The second is a RangeSet containing the confident
     regions for labeling, or None if we are running in training mode.
   """
-  ref_contigs = genomics_io.make_ref_reader(options.reference_filename).contigs
-  sam_contigs = genomics_io.make_sam_reader(options.reads_filename).contigs
+  ref_contigs = fasta.RefFastaReader(options.reference_filename).header.contigs
+  sam_contigs = sam.SamReader(options.reads_filename).header.contigs
 
   # Add in confident regions and vcf_contigs if in training mode.
   vcf_contigs = None
   if in_training_mode(options):
-    vcf_contigs = genomics_io.make_vcf_reader(
-        options.truth_variants_filename).contigs
+    vcf_contigs = vcf.VcfReader(options.truth_variants_filename).header.contigs
 
   contigs = _ensure_consistent_contigs(ref_contigs, sam_contigs, vcf_contigs,
                                        options.exclude_contigs,
@@ -993,9 +1021,6 @@ class OutputsWriter(object):
 
 def make_examples_runner(options):
   """Runs examples creation stage of deepvariant."""
-  # Counting variants.
-  counters = make_counters()
-
   logging.info('Preparing inputs')
   regions = processing_regions_from_options(options)
 
@@ -1023,16 +1048,9 @@ def make_examples_runner(options):
       # we'll never execute the write.
       if gvcfs:
         writer.write_gvcfs(*gvcfs)
-
-      if in_training_mode(options):
-        for example in examples:
-          counters.update(tf_utils.example_truth_variant(example))
       writer.write_examples(*examples)
 
   logging.info('Found %s candidate variants', n_candidates)
-  if in_training_mode(options):
-    # This printout is misleading if we are in calling mode.
-    counters.log()
 
 
 def main(argv=()):
@@ -1048,9 +1066,6 @@ def main(argv=()):
 
     logging_level.set_from_flag()
     hts_verbose.set(hts_verbose.htsLogLevel[FLAGS.hts_logging_level])
-
-    # Give htslib authentication access to GCS.
-    htslib_gcp_oauth.init()
 
     # Set up options; may do I/O.
     options = default_options(add_flags=True, flags_obj=FLAGS)

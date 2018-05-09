@@ -35,28 +35,31 @@ from __future__ import print_function
 
 from absl.testing import absltest
 
-from deepvariant import test_utils
+from third_party.nucleus.io import fasta
+from third_party.nucleus.io import sam
+from third_party.nucleus.util import ranges
+from deepvariant import testdata
 
-from deepvariant.core import genomics_io
-from deepvariant.core import ranges
 from deepvariant.protos import deepvariant_pb2
 from deepvariant.python import allelecounter as _allelecounter
 from deepvariant.python import variant_calling
 
 
 def setUpModule():
-  test_utils.init()
+  testdata.init()
 
 
 class WrapVariantCallingTest(absltest.TestCase):
 
   def test_call_from_allele_counter(self):
-    ref = genomics_io.make_ref_reader(test_utils.CHR20_FASTA)
-    sam_reader = genomics_io.make_sam_reader(test_utils.CHR20_BAM)
+    ref = fasta.RefFastaReader(testdata.CHR20_FASTA)
+    sam_reader = sam.SamReader(testdata.CHR20_BAM)
     size = 1000
     region = ranges.make_range('chr20', 10000000, 10000000 + size)
     allele_counter = _allelecounter.AlleleCounter(
-        ref, region, deepvariant_pb2.AlleleCounterOptions(partition_size=size))
+        ref.get_c_reader(),
+        region,
+        deepvariant_pb2.AlleleCounterOptions(partition_size=size))
     caller = variant_calling.VariantCaller(
         deepvariant_pb2.VariantCallerOptions(
             min_count_snps=2,

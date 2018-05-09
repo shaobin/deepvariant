@@ -45,9 +45,10 @@ import operator
 
 import numpy as np
 
-from deepvariant.core.genomics import variants_pb2
-from deepvariant.core import genomics_math
-from deepvariant.core import variantutils
+from third_party.nucleus.protos import variants_pb2
+from third_party.nucleus.util import genomics_math
+from third_party.nucleus.util import variantcall_utils
+from third_party.nucleus.util import vcf_constants
 from deepvariant.python import variant_calling
 
 # Reference bases with genotype calls must be one of these four values.
@@ -296,12 +297,12 @@ class VariantCaller(object):
           call_set_name=self.options.sample_name,
           genotype=[0, 0],
           genotype_likelihood=first_record.likelihoods)
-      variantutils.set_variantcall_gq(call, min_gq)
-      variantutils.set_variantcall_min_dp(call, min_dp)
+      variantcall_utils.set_gq(call, min_gq)
+      variantcall_utils.set_min_dp(call, min_dp)
       yield variants_pb2.Variant(
           reference_name=first_record.summary_counts.reference_name,
           reference_bases=first_record.summary_counts.ref_base,
-          alternate_bases=[variantutils.GVCF_ALT_ALLELE],
+          alternate_bases=[vcf_constants.GVCF_ALT_ALLELE],
           start=first_record.summary_counts.position,
           end=last_record.summary_counts.position + 1,
           calls=[call])

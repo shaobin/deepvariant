@@ -42,15 +42,14 @@ import tensorflow as tf
 
 from absl import logging
 
-from deepvariant.core.genomics import variants_pb2
+from third_party.nucleus.protos import variants_pb2
+from third_party.nucleus.util import errors
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import proto_utils
+from third_party.nucleus.util import variant_utils
 from deepvariant import logging_level
 from deepvariant import modeling
 from deepvariant import tf_utils
-from deepvariant.core import errors
-from deepvariant.core import htslib_gcp_oauth
-from deepvariant.core import io_utils
-from deepvariant.core import proto_utils
-from deepvariant.core import variantutils
 from deepvariant.protos import deepvariant_pb2
 
 _ALLOW_EXECUTION_HARDWARE = [
@@ -272,9 +271,9 @@ def _create_cvo_proto(encoded_variant, gls, encoded_alt_allele_indices):
   debug_info = None
   if FLAGS.include_debug_info:
     debug_info = deepvariant_pb2.CallVariantsOutput.DebugInfo(
-        has_insertion=variantutils.has_insertion(variant),
-        has_deletion=variantutils.has_deletion(variant),
-        is_snp=variantutils.is_snp(variant),
+        has_insertion=variant_utils.has_insertion(variant),
+        has_deletion=variant_utils.has_deletion(variant),
+        is_snp=variant_utils.is_snp(variant),
         predicted_label=np.argmax(gls))
   call_variants_output = deepvariant_pb2.CallVariantsOutput(
       variant=variant,
@@ -298,6 +297,7 @@ def call_variants(examples_filename,
     logging.warning('Unable to read any records from %s. Output will contain '
                     'zero records.', examples_filename)
     io_utils.write_tfrecords([], output_file)
+    return
   elif example_format != 'raw':
     raise ValueError('The TF examples in {} has image/format \'{}\' '
                      '(expected \'raw\') which means you might need to rerun '
@@ -367,9 +367,6 @@ def main(argv=()):
     proto_utils.uses_fast_cpp_protos_or_die()
 
     logging_level.set_from_flag()
-
-    # Give htslib authentication access to GCS.
-    htslib_gcp_oauth.init()
 
     model = modeling.get_model(FLAGS.model_name)
     call_variants(

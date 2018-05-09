@@ -32,16 +32,16 @@
 #include "deepvariant/pileup_image_native.h"
 
 #include <algorithm>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "deepvariant/core/protos/core.pb.h"
-#include "deepvariant/core/genomics/cigar.pb.h"
-#include "deepvariant/core/genomics/position.pb.h"
-#include "deepvariant/core/genomics/reads.pb.h"
-#include "deepvariant/core/genomics/variants.pb.h"
+#include "third_party/nucleus/protos/cigar.pb.h"
+#include "third_party/nucleus/protos/position.pb.h"
+#include "third_party/nucleus/protos/reads.pb.h"
+#include "third_party/nucleus/protos/variants.pb.h"
 #include "tensorflow/core/platform/logging.h"
 
 using nucleus::genomics::v1::Read;

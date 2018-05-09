@@ -40,11 +40,11 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from deepvariant.core.genomics import variants_pb2
+from third_party.nucleus.protos import variants_pb2
 
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import ranges
 from tensorflow.core.example import example_pb2
-from deepvariant.core import io_utils
-from deepvariant.core import ranges
 from deepvariant.protos import deepvariant_pb2
 
 
@@ -81,7 +81,7 @@ def example_variant(example):
 
 def example_label(example):
   """Gets the label field from example as a string."""
-  return example.features.feature['label'].int64_list.value[0]
+  return int(example.features.feature['label'].int64_list.value[0])
 
 
 def example_image_format(example):
@@ -95,12 +95,6 @@ def example_image_shape(example):
     raise ValueError('Invalid image/shape: we expect to find an image/shape '
                      'field with length 3.')
   return example.features.feature['image/shape'].int64_list.value[0:3]
-
-
-def example_truth_variant(example):
-  """Gets and decodes the truth_variant field from example as a Variant."""
-  return variants_pb2.Variant.FromString(
-      example.features.feature['truth_variant/encoded'].bytes_list.value[0])
 
 
 def example_key(example):
@@ -123,25 +117,16 @@ def example_set_label(example, numeric_label):
   example.features.feature['label'].int64_list.value[:] = [numeric_label]
 
 
-def example_set_truth_variant(example, truth_variant, simplify=True):
-  """Sets the truth_variant feature of example to truth_variant.
-
-  The feature 'truth_variant' of example.features gets set to the serialized
-  version of truth_variant. If simplify is True, we strip out the fields of
-  truth_variant that aren't useful for training purposes (such as the INFO
-  field map). truth_variant isn't modified directly, regardless.
+def example_set_variant(example, variant):
+  """Sets the variant/encoded feature of example to variant.SerializeToString().
 
   Args:
     example: a tf.Example proto.
-    truth_variant: a
-      third_party.nucleus.protos.Variant proto.
-    simplify: boolean. If True, we will simplify truth_variant before encoding
-      it. If False, truth_variant will be written out as is.
+    variant: third_party.nucleus.protos.Variant protobuf containing information
+      about a candidate variant call.
   """
-  if simplify:
-    truth_variant = _simplify_variant(truth_variant)
-  example.features.feature['truth_variant/encoded'].bytes_list.value[:] = [
-      truth_variant.SerializeToString()
+  example.features.feature['variant/encoded'].bytes_list.value[:] = [
+      variant.SerializeToString()
   ]
 
 
@@ -231,8 +216,7 @@ def make_example(variant, alt_alleles, encoded_image, shape, image_format):
       ranges.to_literal(
           ranges.make_range(variant.reference_name, variant.start,
                             variant.end)))
-  features.feature['variant/encoded'].bytes_list.value.append(
-      variant.SerializeToString())
+  example_set_variant(example, variant)
   all_alts = list(variant.alternate_bases)
   alt_indices = sorted(all_alts.index(alt) for alt in alt_alleles)
 

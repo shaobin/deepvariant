@@ -33,6 +33,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import json
+import math
+import os
+
 
 
 from tensorflow import flags
@@ -41,11 +45,11 @@ import tensorflow as tf
 
 from absl import logging
 
+from third_party.nucleus.util import proto_utils
+from third_party.nucleus.util import variant_utils
 from deepvariant import data_providers
 from deepvariant import logging_level
 from deepvariant import modeling
-from deepvariant.core import proto_utils
-from deepvariant.core import variantutils
 
 slim = tf.contrib.slim
 FLAGS = flags.FLAGS
@@ -62,14 +66,11 @@ flags.DEFINE_string('checkpoint_dir', '/tmp/deepvariant/',
 flags.DEFINE_string('eval_dir', '/tmp/deepvariant/',
                     'Directory where the results are saved to.')
 
-flags.DEFINE_integer('eval_interval_secs', 600,
-                     'The frequency, in seconds, with which evaluation is run.')
-
-flags.DEFINE_integer('batches_per_eval_step', 1000,
-                     'Number of batches to evaluate in each eval step.')
-
 flags.DEFINE_integer('max_evaluations', None,
                      'Max number of batches to evaluate')
+
+flags.DEFINE_integer('max_examples', 64 * 1024 * 4,
+                     'Maximum number of examples to evaluate.')
 
 flags.DEFINE_string('model_name', 'inception_v3',
                     'The name of the model to use for predictions.')
@@ -109,7 +110,7 @@ def select_variants_weights(variant_p_func, encoded_variants, name=None):
   def _select(encoded_variants):
     weights = [
         1.0 * variant_p_func(variant)
-        for variant in variantutils.decode_variants(encoded_variants)
+        for variant in variant_utils.decode_variants(encoded_variants)
     ]
     return np.array(weights, dtype=np.float32)
 
@@ -145,7 +146,8 @@ def calling_metrics(metrics_map, selectors_map, predictions, labels):
     to a metrics_map.values() element.
   """
   return {
-      mname + '/' + sname: mfunc(predictions, labels, weights=weights)
+      mname + '/' + sname: mfunc(
+          predictions=predictions, labels=labels, weights=weights)
       for sname, weights in selectors_map.items()
       for mname, mfunc in metrics_map.items()
   }
@@ -157,84 +159,184 @@ def main(_):
   if not FLAGS.dataset_config_pbtxt:
     logging.error('Need to specify --dataset_config_pbtxt')
   logging_level.set_from_flag()
+  eval_loop(
+      master=FLAGS.master,
+      dataset_config_pbtxt=FLAGS.dataset_config_pbtxt,
+      checkpoint_dir=FLAGS.checkpoint_dir,
+      model_name=FLAGS.model_name,
+      batch_size=FLAGS.batch_size,
+      moving_average_decay=FLAGS.moving_average_decay,
+      max_examples=FLAGS.max_examples,
+      eval_dir=FLAGS.eval_dir,
+      max_evaluations=FLAGS.max_evaluations,
+  )
 
-  g = tf.Graph()
-  with g.as_default():
-    tf_global_step = slim.get_or_create_global_step()
 
-    model = modeling.get_model(FLAGS.model_name)
-    dataset = data_providers.get_dataset(FLAGS.dataset_config_pbtxt)
-    print('Running evaluations on {} with model {}\n'.format(dataset, model))
+def make_metrics(predictions, labels, encoded_variants):
+  """Creates our evaluation metrics."""
+  # Define the metrics we'll get for each variant selection:
+  raw_metrics = {
+      'Accuracy': tf.metrics.accuracy,
+      'Precision': tf.metrics.precision,
+      'Recall': tf.metrics.recall,
+      'FPs': tf.metrics.false_positives,
+      'FNs': tf.metrics.false_negatives,
+      'TPs': tf.metrics.true_positives,
+      # redacted
+      # 'TNs': tf.metrics.true_negatives,
+  }
 
-    batch = data_providers.make_training_batches(dataset.get_slim_dataset(),
-                                                 model, FLAGS.batch_size)
-    images, labels, encoded_truth_variants = batch
-    endpoints = model.create(images, dataset.num_classes, is_training=False)
-    predictions = tf.argmax(endpoints['Predictions'], 1)
+  def _make_selector(func):
+    return select_variants_weights(func, encoded_variants)
 
-    # For eval, explicitly add moving_mean and moving_variance variables to
-    # the MOVING_AVERAGE_VARIABLES collection.
-    variable_averages = tf.train.ExponentialMovingAverage(
-        FLAGS.moving_average_decay, tf_global_step)
+  selectors = {
+      'All': None,
+      'SNPs': _make_selector(variant_utils.is_snp),
+      'Indels': _make_selector(variant_utils.is_indel),
+      # These haven't proven particularly useful, but are commented out here
+      # in case someone wants to do some more explorations.
+      # 'Insertions': _make_selector(variant_utils.has_insertion),
+      # 'Deletions': _make_selector(variant_utils.has_deletion),
+      # 'BiAllelic': _make_selector(variant_utils.is_biallelic),
+      # 'MultiAllelic': _make_selector(variant_utils.is_multiallelic),
+      # 'HomRef': tf.equal(labels, 0),
+      # 'Het': tf.equal(labels, 1),
+      # 'HomAlt': tf.equal(labels, 2),
+      # 'NonRef': tf.greater(labels, 0),
+  }
 
-    for var in tf.get_collection('moving_vars'):
-      tf.add_to_collection(tf.GraphKeys.MOVING_AVERAGE_VARIABLES, var)
-    for var in slim.get_model_variables():
-      tf.add_to_collection(tf.GraphKeys.MOVING_AVERAGE_VARIABLES, var)
+  return tf.contrib.metrics.aggregate_metric_map(
+      calling_metrics(raw_metrics, selectors, predictions, labels))
 
-    variables_to_restore = variable_averages.variables_to_restore()
-    variables_to_restore[tf_global_step.op.name] = tf_global_step
 
-    # Define the metrics:
-    metrics = {
-        'Accuracy':
-            tf.contrib.metrics.streaming_accuracy,
-        'Precision':
-            tf.contrib.metrics.streaming_precision,
-        'Recall':
-            tf.contrib.metrics.streaming_recall,
-        'Mean_absolute_error':
-            tf.contrib.metrics.streaming_mean_absolute_error,
-        'FPs':
-            tf.contrib.metrics.streaming_false_positives,
-        'FNs':
-            tf.contrib.metrics.streaming_false_negatives,
-    }
+def checkpoints_iterator(checkpoint_dir):
+  # This is here to make it easy to mock out the iterator for tests.
+  return tf.contrib.training.checkpoints_iterator(checkpoint_dir)
 
-    def _make_selector(func):
-      return select_variants_weights(func, encoded_truth_variants)
 
-    selectors = {
-        'All': None,
-        'SNPs': _make_selector(variantutils.is_snp),
-        'Indels': _make_selector(variantutils.is_indel),
-        # These haven't proven particularly useful, but are commented out here
-        # in case someone wants to do some more explorations.
-        # 'Insertions': _make_selector(variantutils.has_insertion),
-        # 'Deletions': _make_selector(variantutils.has_deletion),
-        # 'BiAllelic': _make_selector(variantutils.is_biallelic),
-        # 'MultiAllelic': _make_selector(variantutils.is_multiallelic),
-        # 'HomRef': tf.equal(labels, 0),
-        # 'Het': tf.equal(labels, 1),
-        # 'HomAlt': tf.equal(labels, 2),
-        # 'NonRef': tf.greater(labels, 0),
-    }
-    metrics = calling_metrics(metrics, selectors, predictions, labels)
-    names_to_values, names_to_updates = slim.metrics.aggregate_metric_map(
-        metrics)
+def eval_loop(master, dataset_config_pbtxt, checkpoint_dir, model_name,
+              batch_size, moving_average_decay, max_examples, eval_dir,
+              max_evaluations):
+  logging.info('Running fixed eval for: %s', dataset_config_pbtxt)
 
-    for name, value in names_to_values.iteritems():
-      slim.summaries.add_scalar_summary(value, name, print_summary=True)
+  num_evaluations = 0
+  for checkpoint_path in checkpoints_iterator(checkpoint_dir):
+    logging.info('Using checkpoint %s %d', checkpoint_path, num_evaluations)
 
-    slim.evaluation.evaluation_loop(
-        FLAGS.master,
-        FLAGS.checkpoint_dir,
-        logdir=FLAGS.eval_dir,
-        num_evals=FLAGS.batches_per_eval_step,
-        eval_op=names_to_updates.values(),
-        variables_to_restore=variables_to_restore,
-        max_number_of_evaluations=FLAGS.max_evaluations,
-        eval_interval_secs=FLAGS.eval_interval_secs)
+    g = tf.Graph()
+    with g.as_default():
+      tf_global_step = tf.train.get_or_create_global_step()
+
+      # redacted
+      model = modeling.get_model(model_name)
+      dataset = data_providers.get_dataset(dataset_config_pbtxt)
+      logging.info('Running evaluations on %s with model %s', dataset, model)
+
+      images, labels, encoded_variant = data_providers.make_batches(
+          dataset.get_slim_dataset(), model, batch_size, mode='EVAL')
+      endpoints = model.create(images, dataset.num_classes, is_training=False)
+      predictions = tf.argmax(endpoints['Predictions'], 1)
+
+      # For eval, explicitly add moving_mean and moving_variance variables to
+      # the MOVING_AVERAGE_VARIABLES collection.
+      variable_averages = tf.train.ExponentialMovingAverage(
+          moving_average_decay, tf_global_step)
+
+      for var in tf.get_collection('moving_vars'):
+        tf.add_to_collection(tf.GraphKeys.MOVING_AVERAGE_VARIABLES, var)
+      for var in slim.get_model_variables():
+        tf.add_to_collection(tf.GraphKeys.MOVING_AVERAGE_VARIABLES, var)
+
+      variables_to_restore = variable_averages.variables_to_restore()
+      variables_to_restore[tf_global_step.op.name] = tf_global_step
+
+      names_to_values, names_to_updates = make_metrics(predictions, labels,
+                                                       encoded_variant)
+
+      for name, value in names_to_values.iteritems():
+        slim.summaries.add_scalar_summary(value, name, print_summary=True)
+
+      num_batches = int(
+          math.floor(
+              min(max_examples, dataset.num_examples) / float(batch_size)))
+      num_samples = batch_size * num_batches
+      logging.info('Dataset has %d samples, doing eval over %d',
+                   dataset.num_examples, num_samples)
+
+      names_to_values = slim.evaluation.evaluate_once(
+          master=master,
+          checkpoint_path=checkpoint_path,
+          logdir=eval_dir,
+          variables_to_restore=variables_to_restore,
+          num_evals=num_batches,
+          initial_op=tf.group(tf.global_variables_initializer(),
+                              tf.local_variables_initializer()),
+          eval_op=names_to_updates.values(),
+          final_op=names_to_values,
+      )
+
+      # --- LOW LEVEL [WIP], hangs, initialization seems busted ---
+      # This is (marginally) nicer as it can eliminate the slim dep.
+      # saver = tf.train.Saver(variables_to_restore)
+      # scaffold = tf.train.Scaffold(saver=saver)
+      # names_to_values = tf.contrib.training.evaluate_once(
+      #     checkpoint_path=checkpoint_path,
+      #     master=FLAGS.master,
+      #     scaffold=scaffold,
+      #     eval_ops=names_to_updates.values(),
+      #     final_ops=names_to_values,
+      # )
+
+      _write_checkpoint_metrics(
+          checkpoint_path, names_to_values, eval_dir=eval_dir)
+
+    num_evaluations += 1
+    if max_evaluations is not None and num_evaluations >= max_evaluations:
+      return
+
+
+def checkpoint_metrics_path(checkpoint_path, eval_dir):
+  """Gets a path to the JSON of eval metrics for checkpoint in eval_dir."""
+  return os.path.join(eval_dir, os.path.basename(checkpoint_path) + '.metrics')
+
+
+def read_metrics(checkpoint_path, eval_dir):
+  """Reads the JSON of metrics for checkpoint_path in eval_dir."""
+  metrics_path = checkpoint_metrics_path(checkpoint_path, eval_dir)
+  with tf.gfile.GFile(metrics_path) as fin:
+    return {k: float(v) for k, v in json.load(fin).iteritems()}
+
+
+def _write_checkpoint_metrics(checkpoint_path, metrics_and_values, eval_dir):
+  """Writes a JSON of metrics for checkpoint_path in eval_dir.
+
+  This function writes out metrics to a JSON for a checkpoint into eval_dir. The
+  exact path of this file will be computed with:
+
+    `checkpoint_metrics_path(checkpoint_path, eval_dir)`
+
+  and the values for metrics_and_values (a dict of strings => objects) written
+  out as key: str(object) into a JSON file.
+
+  Args:
+    checkpoint_path: str; a path to the checkpoint we computed metrics on.
+    metrics_and_values: dict[string,object]; a dictionary of key/value pairs
+      containing our metrics. These will be converted to a JSON of key/string
+      pairs and written out to disk.
+    eval_dir: str; a path to a directory where we will write out our checkpoint
+      metrics.
+  """
+  path = checkpoint_metrics_path(checkpoint_path, eval_dir)
+  serializable = {k: str(v) for k, v in metrics_and_values.iteritems()}
+  logging.info('Writing checkpoint metrics %s', path)
+  try:
+    with tf.gfile.GFile(path, 'w') as fout:
+      json.dump(serializable, fout, sort_keys=True, indent=4)
+  except:  # pylint: disable=bare-except
+    # Note we have a bare exception here as as there's no clear TF base
+    # exception to catch will cover all of the potential issues that might arise
+    # trying to write our metrics to our metrics file.
+    logging.warning('Failed to write checkpoint metrics to path %s', path)
 
 
 if __name__ == '__main__':

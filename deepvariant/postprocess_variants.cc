@@ -31,10 +31,10 @@
 
 #include "deepvariant/postprocess_variants.h"
 
-#include "deepvariant/core/protos/core.pb.h"
-#include "deepvariant/core/utils.h"
 #include "deepvariant/protos/deepvariant.pb.h"
-#include "deepvariant/core/genomics/variants.pb.h"
+#include "third_party/nucleus/protos/reference.pb.h"
+#include "third_party/nucleus/protos/variants.pb.h"
+#include "third_party/nucleus/util/utils.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/io/compression.h"
 #include "tensorflow/core/lib/io/record_reader.h"
@@ -47,27 +47,28 @@ namespace deepvariant {
 
 namespace {
 
-void SortSingleSiteCalls(const std::vector<core::ContigInfo>& contigs,
-                         std::vector<CallVariantsOutput>* calls) {
+void SortSingleSiteCalls(
+    const std::vector<nucleus::genomics::v1::ContigInfo>& contigs,
+    std::vector<CallVariantsOutput>* calls) {
   std::vector<CallVariantsOutput> output;
   if (calls->empty()) {
     return;
   }
   //   Create the mapping from from contig to pos_in_fasta.
   std::map<string, int> contig_name_to_pos_in_fasta =
-      core::MapContigNameToPosInFasta(contigs);
+      nucleus::MapContigNameToPosInFasta(contigs);
   std::sort(calls->begin(), calls->end(),
             [&contig_name_to_pos_in_fasta](const CallVariantsOutput& a,
                                            const CallVariantsOutput& b) {
-              return core::CompareVariants(a.variant(), b.variant(),
-                                           contig_name_to_pos_in_fasta);
+              return nucleus::CompareVariants(a.variant(), b.variant(),
+                                              contig_name_to_pos_in_fasta);
             });
 }
 
 }  // namespace
 
 void ProcessSingleSiteCallTfRecords(
-    const std::vector<core::ContigInfo>& contigs,
+    const std::vector<nucleus::genomics::v1::ContigInfo>& contigs,
     const std::vector<string>& tfrecord_paths,
     const string& output_tfrecord_path) {
   std::vector<CallVariantsOutput> single_site_calls;
@@ -75,7 +76,7 @@ void ProcessSingleSiteCallTfRecords(
   for (const string& tfrecord_path : tfrecord_paths) {
     std::unique_ptr<tensorflow::RandomAccessFile> read_file;
     TF_CHECK_OK(env->NewRandomAccessFile(tfrecord_path, &read_file));
-    const char* const option = core::EndsWith(tfrecord_path, ".gz")
+    const char* const option = nucleus::EndsWith(tfrecord_path, ".gz")
                                    ? tensorflow::io::compression::kGzip
                                    : tensorflow::io::compression::kNone;
     tensorflow::io::RecordReader reader(

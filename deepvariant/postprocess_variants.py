@@ -44,18 +44,21 @@ import tensorflow as tf
 
 from absl import logging
 
-from deepvariant.core.genomics import struct_pb2
-from deepvariant.core.genomics import variants_pb2
+from third_party.nucleus.io import fasta
+from third_party.nucleus.io import vcf
+from third_party.nucleus.protos import struct_pb2
+from third_party.nucleus.protos import variants_pb2
+from third_party.nucleus.util import errors
+from third_party.nucleus.util import genomics_math
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import proto_utils
+from third_party.nucleus.util import ranges
+from third_party.nucleus.util import variant_utils
+from third_party.nucleus.util import variantcall_utils
+from third_party.nucleus.util import vcf_constants
+from deepvariant import dv_vcf_constants
 from deepvariant import haplotypes
 from deepvariant import logging_level
-from deepvariant.core import errors
-from deepvariant.core import genomics_io
-from deepvariant.core import genomics_math
-from deepvariant.core import io_utils
-from deepvariant.core import proto_utils
-from deepvariant.core import ranges
-from deepvariant.core import variantutils
-from deepvariant.core.protos import core_pb2
 from deepvariant.protos import deepvariant_pb2
 from deepvariant.python import postprocess_variants as postprocess_variants_lib
 
@@ -89,23 +92,6 @@ flags.DEFINE_string(
     'gvcf_outfile', None,
     'Optional. Destination path where we will write the Genomic VCF output.')
 
-# The filter field strings to add to variants created by this method.
-DEEP_VARIANT_REF_FILTER = 'RefCall'
-DEEP_VARIANT_QUAL_FILTER = 'LowQual'
-DEEP_VARIANT_PASS = 'PASS'
-DEEP_VARIANT_ALL_FILTER_VALUES = frozenset(
-    [DEEP_VARIANT_REF_FILTER, DEEP_VARIANT_QUAL_FILTER, DEEP_VARIANT_PASS])
-
-FILTERS = [
-    core_pb2.VcfFilterInfo(
-        id=DEEP_VARIANT_REF_FILTER,
-        description='Genotyping model thinks this site is reference.'),
-    core_pb2.VcfFilterInfo(
-        id=DEEP_VARIANT_QUAL_FILTER,
-        description=
-        'Confidence in this variant being real is below calling threshold.'),
-]
-
 # Some format fields are indexed by alt allele, such as AD (depth by allele).
 # These need to be cleaned up if we remove any alt alleles. Any info field
 # listed here will be have its values cleaned up if we've removed any alt
@@ -136,11 +122,8 @@ def _extract_single_sample_name(record):
         call_set_name of the VariantCall is not populated.
   """
   variant = record.variant
-  if len(variant.calls) != 1:
-    raise ValueError(
-        'Error extracting name: expected one call in {}, not {}'.format(
-            record, len(variant.calls)))
-  name = variant.calls[0].call_set_name
+  call = variant_utils.only_call(variant)
+  name = call.call_set_name
   if not name:
     raise ValueError(
         'Error extracting name: no call_set_name set: {}'.format(record))
@@ -161,12 +144,12 @@ def compute_filter_fields(variant, min_quality):
   Returns:
     Filter field strings to be added to the variant.
   """
-  if variantutils.genotype_type(variant) == variantutils.GenotypeType.hom_ref:
-    return [DEEP_VARIANT_REF_FILTER]
+  if variant_utils.genotype_type(variant) == variant_utils.GenotypeType.hom_ref:
+    return [dv_vcf_constants.DEEP_VARIANT_REF_FILTER]
   elif variant.quality < min_quality:
-    return [DEEP_VARIANT_QUAL_FILTER]
+    return [dv_vcf_constants.DEEP_VARIANT_QUAL_FILTER]
   else:
-    return [DEEP_VARIANT_PASS]
+    return [dv_vcf_constants.DEEP_VARIANT_PASS]
 
 
 def most_likely_genotype(predictions, ploidy=2, n_alleles=2):
@@ -276,19 +259,15 @@ def add_call_to_variant(variant, predictions, qual_filter=0, sample_name=None):
   Raises:
     ValueError: If variant doesn't have exactly one variant.call record.
   """
-  if len(variant.calls) != 1:
-    raise ValueError('Variant must have exactly one VariantCall record',
-                     variant)
+  call = variant_utils.only_call(variant)
   n_alleles = len(variant.alternate_bases) + 1
   index, genotype = most_likely_genotype(predictions, n_alleles=n_alleles)
   gq, variant.quality = compute_quals(predictions, index)
-  call = variant.calls[0]
   call.call_set_name = sample_name
-  call.genotype[:] = genotype
-  variantutils.set_variantcall_gq(call, gq)
-  call.genotype_likelihood[:] = [
-      genomics_math.perror_to_bounded_log10_perror(gp) for gp in predictions
-  ]
+  variantcall_utils.set_gt(call, genotype)
+  variantcall_utils.set_gq(call, gq)
+  gls = [genomics_math.perror_to_bounded_log10_perror(gp) for gp in predictions]
+  variantcall_utils.set_gl(call, gls)
   variant.filter[:] = compute_filter_fields(variant, qual_filter)
   return variant
 
@@ -314,8 +293,9 @@ def compute_quals(predictions, prediction_index):
   """
   # GQ is prob(genotype) / prob(all genotypes)
   # GQ is rounded to the nearest integer to comply with the VCF spec.
-  gq = np.around(
-      genomics_math.ptrue_to_bounded_phred(predictions[prediction_index]))
+  gq = int(
+      np.around(
+          genomics_math.ptrue_to_bounded_phred(predictions[prediction_index])))
   # QUAL is prob(variant genotype) / prob(all genotypes)
   # Taking the min to avoid minor numerical issues than can push sum > 1.0.
   # redacted
@@ -340,12 +320,16 @@ def expected_alt_allele_indices(num_alternate_bases):
 
 
 def _check_alt_allele_indices(call_variants_outputs):
+  """Returns True if and only if the alt allele indices are valid."""
   all_alt_allele_indices = sorted([
       list(call_variants_output.alt_allele_indices.indices)
       for call_variants_output in call_variants_outputs
   ])
   if all_alt_allele_indices != expected_alt_allele_indices(
       len(call_variants_outputs[0].variant.alternate_bases)):
+    logging.warning('Alt allele indices found from call_variants_outputs for '
+                    'variant %s is %s, which is invalid.',
+                    call_variants_outputs[0].variant, all_alt_allele_indices)
     return False
   return True
 
@@ -545,8 +529,8 @@ def simplify_alleles(variant):
   """Replaces the alleles in variants with their simplified versions.
 
   This function takes a variant and replaces its ref and alt alleles with those
-  produced by a call to variantutils.simplify_alleles() to remove common postfix
-  bases in the alleles that may be present due to pruning away alleles.
+  produced by a call to variant_utils.simplify_alleles() to remove common
+  postfix bases in the alleles that may be present due to pruning away alleles.
 
   Args:
     variant: learning.genomics.genomics.Variant proto we want to simplify.
@@ -555,8 +539,8 @@ def simplify_alleles(variant):
     variant with its ref and alt alleles replaced with their simplified
       equivalents.
   """
-  simplified_alleles = variantutils.simplify_alleles(variant.reference_bases,
-                                                     *variant.alternate_bases)
+  simplified_alleles = variant_utils.simplify_alleles(variant.reference_bases,
+                                                      *variant.alternate_bases)
   variant.reference_bases = simplified_alleles[0]
   variant.alternate_bases[:] = simplified_alleles[1:]
   variant.end = variant.start + len(variant.reference_bases)
@@ -587,9 +571,8 @@ def merge_predictions(call_variants_outputs, qual_filter=None):
 
   canonical_variant = prune_alleles(canonical_variant, alt_alleles_to_remove)
   predictions = [
-      min(flattened_probs_dict[(m, n)])
-      for _, _, m, n in variantutils.genotype_ordering_in_likelihoods(
-          canonical_variant)
+      min(flattened_probs_dict[(m, n)]) for _, _, m, n in
+      variant_utils.genotype_ordering_in_likelihoods(canonical_variant)
   ]
   denominator = sum(predictions)
   # Note the simplify_alleles call *must* happen after the predictions
@@ -599,31 +582,17 @@ def merge_predictions(call_variants_outputs, qual_filter=None):
   return canonical_variant, [i / denominator for i in predictions]
 
 
-def write_variants_to_vcf(contigs,
-                          variant_generator,
-                          output_vcf_path,
-                          sample_name,
-                          filters=None):
+def write_variants_to_vcf(variant_generator, output_vcf_path, header):
   """Writes Variant protos to a VCF file.
 
   Args:
-    contigs: list(ContigInfo). A list of the reference genome contigs for
-      writers that need contig information.
     variant_generator: generator. A generator that yields sorted Variant protos.
     output_vcf_path: str. Output file in VCF format.
-    sample_name: str. Sample name to write to VCF file.
-    filters: list(VcfFilterInfo). A list of filters to include in the VCF
-      header. If not specified, the default DeepVariant headers are used.
+    header: VcfHeader proto. The VCF header to use for writing the variants.
   """
-  if filters is None:
-    filters = FILTERS
   logging.info('Writing output to VCF file: %s', output_vcf_path)
-  with genomics_io.make_vcf_writer(
-      output_vcf_path,
-      contigs,
-      samples=[sample_name],
-      filters=filters,
-      round_qualities=True) as writer:
+  with vcf.VcfWriter(
+      output_vcf_path, header=header, round_qualities=True) as writer:
     for variant in variant_generator:
       writer.write(variant)
 
@@ -653,7 +622,7 @@ def _transform_call_variants_output_to_variants(
   for _, group in itertools.groupby(
       io_utils.read_tfrecords(
           input_sorted_tfrecord_path, proto=deepvariant_pb2.CallVariantsOutput),
-      lambda x: variantutils.variant_range(x.variant)):
+      lambda x: variant_utils.variant_range(x.variant)):
     outputs = list(group)
     canonical_variant, predictions = merge_predictions(
         outputs, multi_allelic_qual_filter)
@@ -739,7 +708,7 @@ def _create_record_from_template(template, start, end, fasta_reader):
   retval.start = start
   retval.end = end
   if start != template.start:
-    retval.reference_bases = fasta_reader.bases(
+    retval.reference_bases = fasta_reader.query(
         ranges.make_range(retval.reference_name, start, start + 1))
   return retval
 
@@ -755,19 +724,17 @@ def _transform_to_gvcf_record(variant):
     The variant after applying the modification to its alleles and
     allele-related FORMAT fields.
   """
-  if variantutils.GVCF_ALT_ALLELE not in variant.alternate_bases:
-    variant.alternate_bases.append(variantutils.GVCF_ALT_ALLELE)
+  if vcf_constants.GVCF_ALT_ALLELE not in variant.alternate_bases:
+    variant.alternate_bases.append(vcf_constants.GVCF_ALT_ALLELE)
     # Add one new GL for het allele/gVCF for each of the other alleles, plus one
     # for the homozygous gVCF allele.
     num_new_gls = len(variant.alternate_bases) + 1
-    variant.calls[0].genotype_likelihood.extend(
-        [_GVCF_ALT_ALLELE_GL] * num_new_gls)
-    if variant.calls[0].info and 'AD' in variant.calls[0].info:
-      variant.calls[0].info['AD'].values.extend(
-          [struct_pb2.Value(number_value=0)])
-    if variant.calls[0].info and 'VAF' in variant.calls[0].info:
-      variant.calls[0].info['VAF'].values.extend(
-          [struct_pb2.Value(number_value=0)])
+    call = variant_utils.only_call(variant)
+    call.genotype_likelihood.extend([_GVCF_ALT_ALLELE_GL] * num_new_gls)
+    if call.info and 'AD' in call.info:
+      call.info['AD'].values.extend([struct_pb2.Value(int_value=0)])
+    if call.info and 'VAF' in call.info:
+      call.info['VAF'].values.extend([struct_pb2.Value(number_value=0)])
 
   return variant
 
@@ -852,22 +819,22 @@ def main(argv=()):
 
     logging_level.set_from_flag()
 
-    fasta_reader = genomics_io.make_ref_reader(FLAGS.ref,
-                                               cache_size=_FASTA_CACHE_SIZE)
-    contigs = fasta_reader.contigs
+    fasta_reader = fasta.RefFastaReader(FLAGS.ref, cache_size=_FASTA_CACHE_SIZE)
+    contigs = fasta_reader.header.contigs
     paths = io_utils.maybe_generate_sharded_filenames(FLAGS.infile)
+    # Read one CallVariantsOutput record and extract the sample name from it.
+    # Note that this assumes that all CallVariantsOutput protos in the infile
+    # contain a single VariantCall within their constituent Variant proto, and
+    # that the call_set_name is identical in each of the records.
+    record = next(
+        io_utils.read_tfrecords(
+            paths[0], proto=deepvariant_pb2.CallVariantsOutput, max_records=1))
+    sample_name = _extract_single_sample_name(record)
+    header = dv_vcf_constants.deepvariant_header(
+        contigs=contigs, sample_names=[sample_name])
     with tempfile.NamedTemporaryFile() as temp:
       postprocess_variants_lib.process_single_sites_tfrecords(
           contigs, paths, temp.name)
-      # Read one CallVariantsOutput record and extract the sample name from it.
-      # Note that this assumes that all CallVariantsOutput protos in the infile
-      # contain a single VariantCall within their constituent Variant proto, and
-      # that the call_set_name is identical in each of the records.
-      record = next(
-          io_utils.read_tfrecords(
-              paths[0], proto=deepvariant_pb2.CallVariantsOutput,
-              max_records=1))
-      sample_name = _extract_single_sample_name(record)
       independent_variants = _transform_call_variants_output_to_variants(
           input_sorted_tfrecord_path=temp.name,
           qual_filter=FLAGS.qual_filter,
@@ -876,10 +843,9 @@ def main(argv=()):
       variant_generator = haplotypes.maybe_resolve_conflicting_variants(
           independent_variants)
       write_variants_to_vcf(
-          contigs=contigs,
           variant_generator=variant_generator,
           output_vcf_path=FLAGS.outfile,
-          sample_name=sample_name)
+          header=header)
 
     # Also write out the gVCF file if it was provided.
     if FLAGS.nonvariant_site_tfrecord_path:
@@ -887,9 +853,7 @@ def main(argv=()):
           FLAGS.nonvariant_site_tfrecord_path,
           key=_get_contig_based_variant_sort_keyfn(contigs),
           proto=variants_pb2.Variant)
-      with genomics_io.make_vcf_reader(
-          FLAGS.outfile, use_index=False,
-          include_likelihoods=True) as variant_reader:
+      with vcf.VcfReader(FLAGS.outfile, use_index=False) as variant_reader:
         lessthanfn = _get_contig_based_lessthan(contigs)
         gvcf_variants = (
             _transform_to_gvcf_record(variant)
@@ -897,11 +861,9 @@ def main(argv=()):
         merged_variants = merge_variants_and_nonvariants(
             gvcf_variants, nonvariant_generator, lessthanfn, fasta_reader)
         write_variants_to_vcf(
-            contigs=contigs,
             variant_generator=merged_variants,
             output_vcf_path=FLAGS.gvcf_outfile,
-            sample_name=sample_name,
-            filters=FILTERS)
+            header=header)
 
 
 if __name__ == '__main__':

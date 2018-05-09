@@ -42,12 +42,13 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import tensorflow as tf
 
-from deepvariant.core.genomics import reads_pb2
-from deepvariant import test_utils
-from deepvariant.core import genomics_io
-from deepvariant.core import io_utils
-from deepvariant.core import ranges
-from deepvariant.core.protos import core_pb2
+from third_party.nucleus.io import fasta
+from third_party.nucleus.io import sam
+from third_party.nucleus.protos import reads_pb2
+from third_party.nucleus.testing import test_utils
+from third_party.nucleus.util import io_utils
+from third_party.nucleus.util import ranges
+from deepvariant import testdata
 from deepvariant.protos import realigner_pb2
 from deepvariant.realigner import realigner
 from deepvariant.realigner import utils
@@ -56,11 +57,11 @@ FLAGS = flags.FLAGS
 
 
 def setUpModule():
-  test_utils.init()
+  testdata.init()
 
 
 def _get_reads(region):
-  with genomics_io.make_sam_reader(test_utils.CHR20_BAM) as in_sam_reader:
+  with sam.SamReader(testdata.CHR20_BAM) as in_sam_reader:
     return list(in_sam_reader.query(region))
 
 
@@ -183,7 +184,7 @@ class ReadAssignmentTests(parameterized.TestCase):
 class RealignerTest(parameterized.TestCase):
 
   def setUp(self):
-    self.ref_reader = genomics_io.make_ref_reader(test_utils.CHR20_FASTA)
+    self.ref_reader = fasta.RefFastaReader(testdata.CHR20_FASTA)
     self.config = realigner.realigner_config(FLAGS)
     self.reads_realigner = realigner.Realigner(self.config, self.ref_reader)
 
@@ -337,15 +338,16 @@ class RealignerTest(parameterized.TestCase):
 class RealignerIntegrationTest(absltest.TestCase):
 
   def test_realigner_end2end(self):
-    ref_reader = genomics_io.make_ref_reader(test_utils.CHR20_FASTA)
+    ref_reader = fasta.RefFastaReader(testdata.CHR20_FASTA)
     config = realigner.realigner_config(FLAGS)
     reads_realigner = realigner.Realigner(config, ref_reader)
     region_str = 'chr20:10,000,000-10,009,999'
 
     regions = ranges.RangeSet.from_regions([region_str])
     for region in regions.partition(1000):
-      with genomics_io.make_sam_reader(
-          test_utils.CHR20_BAM, core_pb2.ReadRequirements()) as sam_reader:
+      with sam.SamReader(
+          testdata.CHR20_BAM,
+          read_requirements=reads_pb2.ReadRequirements()) as sam_reader:
         in_reads = list(sam_reader.query(region))
       windows, out_reads = reads_realigner.realign_reads(in_reads, region)
 
@@ -361,7 +363,7 @@ class RealignerIntegrationTest(absltest.TestCase):
       # Check each window to make sure it's reasonable.
       for window in windows:
         # We always expect the reference sequence to be one of our haplotypes.
-        ref_seq = ref_reader.bases(window.span)
+        ref_seq = ref_reader.query(window.span)
         self.assertIn(ref_seq, set(window.haplotypes))
 
 
