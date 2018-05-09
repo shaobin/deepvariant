@@ -108,7 +108,10 @@ bazel test -c opt --local_test_jobs=1 ${DV_COPT_FLAGS} "$@" deepvariant/...
 bazel test -c opt --local_test_jobs=1 ${DV_COPT_FLAGS} "$@" deepvariant:gpu_tests
 
 # build binaries
-bazel build -c opt ${DV_COPT_FLAGS} "$@" deepvariant:binaries
-
+#bazel build -c opt ${DV_COPT_FLAGS} "$@" deepvariant:binaries
 # Bundle the licenses
-bazel build :licenses_zip
+#bazel build :licenses_zip
+
+# build release binaries
+bazel --batch build -c opt ${DV_COPT_FLAGS} --build_python_zip :binaries
+bazel --batch build :licenses_zip
