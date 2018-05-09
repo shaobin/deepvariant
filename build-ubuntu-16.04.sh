@@ -1,8 +1,8 @@
 set -eux -o pipefail
 
 export DV_COPT_FLAGS="--copt=-msse4.1 --copt=-msse4.2 --copt=-mavx --copt=-O3"
-# TensorFlow 1.7.0
-export DV_TENSORFLOW_GIT_SHA="024aecf414941e11eb643e29ceed3e1c47a115ad"
+# TensorFlow 1.8.0
+export DV_TENSORFLOW_GIT_SHA="93bc2e2072e0daccbcff7a90d397b704a9e8f778"
 export DV_PACKAGE_CURL_PATH="https://storage.googleapis.com/deepvariant/packages"
 
 # install prerequisite
@@ -27,7 +27,7 @@ sudo -H pip install 'scipy>=1.0'
 sudo -H pip install 'oauth2client>=4.0.0'
 sudo -H pip install 'crcmod>=1.7'
 sudo -H pip install six
-sudo -H pip install --upgrade 'tensorflow-gpu==1.7.0'
+sudo -H pip install --upgrade 'tensorflow-gpu==1.8.0'
 
 # Java is available on Kokoro, so we add this cutout.
 if ! java -version 2>&1 | fgrep "1.8"; then
