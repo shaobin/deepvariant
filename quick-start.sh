@@ -42,16 +42,16 @@ echo "Running call_variants"
 
 CALL_VARIANTS_OUTPUT="${OUTPUT_DIR}/call_variants_output.tfrecord.gz"
 
-python "${BIN_DIR}/call_variants.zip" \
+time python "${BIN_DIR}/call_variants.zip" \
  --outfile "${CALL_VARIANTS_OUTPUT}" \
  --examples "${OUTPUT_DIR}/examples.tfrecord@${N_SHARDS}.gz" \
  --checkpoint "${MODEL}"
 
  echo "Running postprocess_variants"
 
- FINAL_OUTPUT_VCF="${OUTPUT_DIR}/output.vcf.gz"
+FINAL_OUTPUT_VCF="${OUTPUT_DIR}/output.vcf.gz"
 
-python "${BIN_DIR}/postprocess_variants.zip" \
+time python "${BIN_DIR}/postprocess_variants.zip" \
   --ref "${REF}" \
   --infile "${CALL_VARIANTS_OUTPUT}" \
   --outfile "${FINAL_OUTPUT_VCF}"
