@@ -7,6 +7,8 @@ MODEL_BUCKET="${BUCKET}/models/DeepVariant/${MODEL_VERSION}/${MODEL_NAME}"
 DATA_BUCKET="${BUCKET}/quickstart-testdata"
 
 WORKSPACE="./quickstart-workspace"
+BIN_DIR="./bazel-bin/deepvariant"
+
 mkdir -p "${WORKSPACE}"
 
 echo "downloading the model"
@@ -20,3 +22,18 @@ REF=quickstart-testdata/ucsc.hg19.chr20.unittest.fasta
 BAM=quickstart-testdata/NA12878_S1.chr20.10_10p1mb.bam
 MODEL="${WORKSPACE}/${MODEL_NAME}/model.ckpt"
 
+echo "Running make_examples"
+
+LOGDIR="${WORKSPACE}/logs"
+N_SHARDS=3
+
+mkdir -p "${LOGDIR}"
+time seq 0 $((N_SHARDS-1)) | \
+  parallel --eta --halt 2 --joblog "${LOGDIR}/log" --res "${LOGDIR}" \
+  python "${BIN_DIR}"/make_examples.zip \
+    --mode calling \
+    --ref "${REF}" \
+    --reads "${BAM}" \
+    --examples "${OUTPUT_DIR}/examples.tfrecord@${N_SHARDS}.gz" \
+    --regions '"chr20:10,000,000-10,010,000"' \
+    --task {}

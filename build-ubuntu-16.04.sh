@@ -13,6 +13,7 @@ sudo -H apt-get -y install libssl-dev libcurl4-openssl-dev liblz-dev libbz2-dev 
 # for the debruijn graph
 sudo -H apt-get -y install libboost-graph-dev
 sudo -H apt-get -y install libcupti-dev
+sudo -H apt-get -y install parallel
 
 sudo -H apt-get -y install python-dev python-pip python-wheel
 sudo -H pip install --upgrade pip
