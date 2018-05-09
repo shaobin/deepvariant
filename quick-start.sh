@@ -51,7 +51,7 @@ python "${BIN_DIR}/call_variants.zip" \
 
  FINAL_OUTPUT_VCF="${OUTPUT_DIR}/output.vcf.gz"
 
-python "{BIN_DIR}/postprocess_variants.zip" \
+python "${BIN_DIR}/postprocess_variants.zip" \
   --ref "${REF}" \
   --infile "${CALL_VARIANTS_OUTPUT}" \
   --outfile "${FINAL_OUTPUT_VCF}"
